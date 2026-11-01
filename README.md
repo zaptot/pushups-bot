@@ -122,5 +122,9 @@ python bot.py
 ```
 
 ## Деплой на Discloud
-Запакуй в zip: `bot.py`, `requirements.txt`, `discloud.config`, `.env` (без `venv`).
-Загрузи на discloud.com. Для обновления — загрузи новый zip; данные в Supabase не пострадают.
+Бот деплоится из этого репозитория через GitHub-интеграцию Discloud: каждый пуш (и мерж PR) в `main`
+автоматически обновляет бота. Секреты (`DISCORD_TOKEN`, `DATABASE_URL`, `PUBG_API_KEY` и т.д.) хранятся
+в переменных окружения приложения на Discloud — в репозиторий их не коммитить.
+
+Ручной вариант: запаковать в zip `bot.py`, `requirements.txt`, `discloud.config` и загрузить на discloud.com.
+Данные в Supabase при обновлении не страдают.
