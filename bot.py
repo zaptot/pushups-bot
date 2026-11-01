@@ -480,14 +480,27 @@ async def owe(
 
 
 @bot.tree.command(name="done", description="Записать сделанные отжимания")
-@app_commands.describe(amount="Сколько отжиманий сделал")
-async def done(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 10000]) -> None:
+@app_commands.describe(
+    amount="Сколько отжиманий сделал",
+    ludoman="Лудомания: засчитается сделанное × случайный коэффициент от 0 до 2",
+)
+async def done(
+    interaction: discord.Interaction, amount: app_commands.Range[int, 1, 10000], ludoman: bool = False
+) -> None:
     if interaction.guild_id is None:
         await interaction.response.send_message(no_guild_reply(), ephemeral=True)
         return
-    await add_entry(interaction.guild_id, interaction.user.id, "done", amount, interaction.user.id, None)
+    counted, reason, gamble_line = amount, None, ""
+    if ludoman:
+        coef = round(random.uniform(0, 2), 2)
+        counted = round(amount * coef)
+        reason = f"🎰 лудомания: {amount} × {coef:.2f}"
+        mood = "🤑 Казино в плюсе!" if coef > 1 else ("💀 Казино забрало всё." if counted == 0 else "📉 Казино в минусе.")
+        gamble_line = f"🎰 Лудомания: {amount} × **{coef:.2f}** = **{counted}**. {mood}\n"
+    if counted > 0:
+        await add_entry(interaction.guild_id, interaction.user.id, "done", counted, interaction.user.id, reason)
     _, done_total, remaining = await user_stats(interaction.guild_id, interaction.user.id)
-    text = f"✅ {interaction.user.mention} сделал **{amount}** отжиманий (за год: {done_total})\n"
+    text = gamble_line + f"✅ {interaction.user.mention} засчитано **{counted}** отжиманий (за год: {done_total})\n"
     text += f"Осталось: **{remaining}**" if remaining else "Долгов нет — красавчик! 🏆"
     await interaction.response.send_message(text)
     # возможно, теперь выполнены условия гражданства
@@ -572,6 +585,8 @@ async def history(interaction: discord.Interaction, user: discord.Member | None 
                 line += f" — {r['reason']}"
         else:
             line = f"<t:{ts}:d> ✅ сделал {r['amount']}"
+            if r["reason"]:
+                line += f" ({r['reason']})"
         lines.append(line)
     embed = discord.Embed(
         title=f"История: {target.display_name}",
