@@ -480,13 +480,18 @@ async def owe(
 
 
 @bot.tree.command(name="done", description="Записать сделанные отжимания")
-@app_commands.describe(
-    amount="Сколько отжиманий сделал",
-    ludoman="Лудомания: засчитается сделанное × случайный коэффициент от 0 до 2",
-)
-async def done(
-    interaction: discord.Interaction, amount: app_commands.Range[int, 1, 10000], ludoman: bool = False
-) -> None:
+@app_commands.describe(amount="Сколько отжиманий сделал")
+async def done(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 10000]) -> None:
+    await record_done(interaction, amount, ludoman=False)
+
+
+@bot.tree.command(name="done_ludoman", description="Записать отжимания × случайный коэффициент от 0 до 2 🎰")
+@app_commands.describe(amount="Сколько отжиманий сделал")
+async def done_ludoman(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 10000]) -> None:
+    await record_done(interaction, amount, ludoman=True)
+
+
+async def record_done(interaction: discord.Interaction, amount: int, ludoman: bool) -> None:
     if interaction.guild_id is None:
         await interaction.response.send_message(no_guild_reply(), ephemeral=True)
         return
