@@ -26,6 +26,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))  # для наград «1-го числа»
 WINDOW_DAYS = 365  # период для лидербордов и остатков
 TOP_SIZE = 15
+DONE_MIN = 10  # меньше за раз записать через /done нельзя
 
 # --- Dota 2 ---
 DOTA_CHANNEL_ID = os.getenv("DOTA_CHANNEL_ID")  # куда писать результаты автопроверки
@@ -480,14 +481,14 @@ async def owe(
 
 
 @bot.tree.command(name="done", description="Записать сделанные отжимания")
-@app_commands.describe(amount="Сколько отжиманий сделал")
-async def done(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 10000]) -> None:
+@app_commands.describe(amount=f"Сколько отжиманий сделал (минимум {DONE_MIN})")
+async def done(interaction: discord.Interaction, amount: app_commands.Range[int, DONE_MIN, 10000]) -> None:
     await record_done(interaction, amount, ludoman=False)
 
 
 @bot.tree.command(name="done_ludoman", description="Записать отжимания × случайный коэффициент от 0 до 2 🎰")
-@app_commands.describe(amount="Сколько отжиманий сделал")
-async def done_ludoman(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 10000]) -> None:
+@app_commands.describe(amount=f"Сколько отжиманий сделал (минимум {DONE_MIN})")
+async def done_ludoman(interaction: discord.Interaction, amount: app_commands.Range[int, DONE_MIN, 10000]) -> None:
     await record_done(interaction, amount, ludoman=True)
 
 
