@@ -626,14 +626,17 @@ async def undo(interaction: discord.Interaction) -> None:
         await interaction.response.send_message(no_guild_reply(), ephemeral=True)
         return
     row = await bot.pool.fetchrow(
-        "DELETE FROM entries WHERE id = ("
-        "  SELECT id FROM entries WHERE guild_id = $1 AND author_id = $2 ORDER BY id DESC LIMIT 1"
-        ") RETURNING user_id, kind, amount",
+        "SELECT id, user_id, kind, amount, reason FROM entries "
+        "WHERE guild_id = $1 AND author_id = $2 ORDER BY id DESC LIMIT 1",
         interaction.guild_id, interaction.user.id,
     )
     if row is None:
         await interaction.response.send_message("Тебе нечего отменять.", ephemeral=True)
         return
+    if row["kind"] == "done" and (row["reason"] or "").startswith("🎰 лудомания:"):
+        await interaction.response.send_message("🎰 Казино ставок не возвращает: бросок лудомании отменить нельзя.", ephemeral=True)
+        return
+    await bot.pool.execute("DELETE FROM entries WHERE id = $1", row["id"])
     if row["kind"] == "owe":
         what = f"назначение {row['amount']} отжиманий <@{row['user_id']}>"
     else:
