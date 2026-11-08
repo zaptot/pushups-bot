@@ -87,6 +87,9 @@ CREATE INDEX IF NOT EXISTS idx_entries_guild_time ON entries (guild_id, created_
 -- откуда взялись отжимания: manual (/owe, /done), dota, court
 ALTER TABLE entries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
 UPDATE entries SET source = 'dota' WHERE source = 'manual' AND reason LIKE 'Dota %, матч %';
+-- /done_ludoman может засчитать 0
+ALTER TABLE entries DROP CONSTRAINT IF EXISTS entries_amount_check;
+ALTER TABLE entries ADD CONSTRAINT entries_amount_check CHECK (amount >= 0);
 
 CREATE TABLE IF NOT EXISTS dota_links (
     guild_id   BIGINT      NOT NULL,
@@ -313,6 +316,17 @@ async def guild_stats(guild_id: int) -> dict[int, tuple[int, int]]:
     return {r["user_id"]: (r["owed"], r["done"]) for r in rows}
 
 
+async def ludoman_balance(guild_id: int) -> dict[int, int]:
+    """user_id -> сколько отжиманий выиграно (+) или проиграно (−) на /done_ludoman за WINDOW_DAYS дней."""
+    rows = await bot.pool.fetch(
+        "SELECT user_id, SUM(amount - substring(reason from 'лудомания: ([0-9]+) ×')::int) AS delta "
+        "FROM entries WHERE guild_id = $1 AND kind = 'done' AND reason LIKE '🎰 лудомания:%' "
+        "AND created_at >= now() - make_interval(days => $2) GROUP BY user_id",
+        guild_id, WINDOW_DAYS,
+    )
+    return {r["user_id"]: r["delta"] for r in rows}
+
+
 async def user_stats(guild_id: int, user_id: int) -> tuple[int, int, int]:
     owed, done = (await guild_stats(guild_id)).get(user_id, (0, 0))
     return owed, done, max(0, owed - done)
@@ -503,8 +517,8 @@ async def record_done(interaction: discord.Interaction, amount: int, ludoman: bo
         reason = f"🎰 лудомания: {amount} × {coef:.2f}"
         mood = "🤑 Казино в плюсе!" if coef > 1 else ("💀 Казино забрало всё." if counted == 0 else "📉 Казино в минусе.")
         gamble_line = f"🎰 Лудомания: {amount} × **{coef:.2f}** = **{counted}**. {mood}\n"
-    if counted > 0:
-        await add_entry(interaction.guild_id, interaction.user.id, "done", counted, interaction.user.id, reason)
+    # записываем и нулевой результат, иначе проигрыш не попадёт в баланс лудомании
+    await add_entry(interaction.guild_id, interaction.user.id, "done", counted, interaction.user.id, reason)
     _, done_total, remaining = await user_stats(interaction.guild_id, interaction.user.id)
     text = gamble_line + f"✅ {interaction.user.mention} засчитано **{counted}** отжиманий (за год: {done_total})\n"
     text += f"Осталось: **{remaining}**" if remaining else "Долгов нет — красавчик! 🏆"
@@ -559,14 +573,18 @@ async def top(interaction: discord.Interaction, board: app_commands.Choice[str])
         title = "🏆 Сделано отжиманий"
     ranking = sorted(((s, uid) for uid, s in scores.items() if s > 0), reverse=True)[:TOP_SIZE]
 
+    balance = await ludoman_balance(interaction.guild_id)
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-    lines = [f"{medals.get(i, f'`{i}.`')} <@{uid}> — **{score}**" for i, (score, uid) in enumerate(ranking, 1)]
+    lines = [
+        f"{medals.get(i, f'`{i}.`')} <@{uid}> — **{score}**" + (f" ({balance[uid]:+d})" if uid in balance else "")
+        for i, (score, uid) in enumerate(ranking, 1)
+    ]
     embed = discord.Embed(
         title=title,
         description="\n".join(lines) or "Пока пусто.",
         color=discord.Color.gold(),
     )
-    embed.set_footer(text=f"За последние {WINDOW_DAYS} дней")
+    embed.set_footer(text=f"За последние {WINDOW_DAYS} дней · в скобках — баланс лудомании")
     await interaction.response.send_message(embed=embed)
 
 
