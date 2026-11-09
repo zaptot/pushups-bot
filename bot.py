@@ -8,11 +8,18 @@ import collections
 import datetime as dt
 import functools
 import io
+import logging
 import math
 import os
 import random
 import re
+import time
 from zoneinfo import ZoneInfo
+
+try:
+    import resource
+except ImportError:  # нет на Windows
+    resource = None
 
 import aiohttp
 import asyncpg
@@ -23,6 +30,7 @@ from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
 
 load_dotenv()
+log = logging.getLogger("pushbot")
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = os.getenv("GUILD_ID")  # необязательно: команды появятся на сервере мгновенно
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -291,14 +299,21 @@ class PushupBot(discord.Client):
         await super().close()
 
     async def on_ready(self) -> None:
-        print(f"Запущен как {self.user} (id {self.user.id})")
+        log.info(f"Запущен как {self.user} (id {self.user.id})")
+
+    async def on_app_command_completion(self, interaction: discord.Interaction, command: app_commands.Command) -> None:
+        log.info("Команда /%s от %s выполнена", command.name, interaction.user)
 
     async def on_interaction(self, interaction: discord.Interaction) -> None:
-        # кнопки и меню голосований (работают и после перезапуска бота)
+        if interaction.type == discord.InteractionType.application_command:
+            log.info("Команда /%s от %s (%s)", (interaction.data or {}).get("name"), interaction.user, interaction.user.id)
+        # кнопки и меню (работают и после перезапуска бота)
         if interaction.type != discord.InteractionType.component:
             return
         parts = (interaction.data or {}).get("custom_id", "").split(":")
-        if parts[0] == "vote" and len(parts) == 3:
+        if parts[0] == "replay" and len(parts) == 4:
+            await handle_replay(interaction, int(parts[1]), float(parts[2]), float(parts[3]))
+        elif parts[0] == "vote" and len(parts) == 3:
             await handle_vote(interaction, int(parts[1]), parts[2])
         elif parts[0] == "elect" and len(parts) == 2:
             values = (interaction.data or {}).get("values") or []
@@ -418,7 +433,7 @@ async def get_role(guild: discord.Guild, key: str) -> discord.Role | None:
         try:
             role = await guild.create_role(name=ROLE_NAMES[key], reason="Роль бота отжиманий")
         except discord.HTTPException as e:
-            print(f"Не удалось создать роль {ROLE_NAMES[key]}: {e}")
+            log.warning(f"Не удалось создать роль {ROLE_NAMES[key]}: {e}")
             return None
     return role
 
@@ -439,7 +454,7 @@ async def change_role(guild: discord.Guild, user_id: int, role: discord.Role, ad
             await member.remove_roles(role, reason="Бот отжиманий")
         return True
     except discord.HTTPException as e:
-        print(f"Не удалось {'выдать' if add else 'снять'} роль {role.name} у {user_id}: {e}")
+        log.warning(f"Не удалось {'выдать' if add else 'снять'} роль {role.name} у {user_id}: {e}")
         return False
 
 
@@ -553,14 +568,17 @@ def wheel_parts(coef: int) -> tuple[Image.Image, Image.Image]:
     return wheel.resize(size, Image.Resampling.LANCZOS), overlay.resize(size, Image.Resampling.LANCZOS)
 
 
-def render_wheel(coef: int, win: bool) -> tuple[bytes, bytes]:
-    """(анимация GIF, финальный кадр PNG). Колесо останавливается стрелкой на нужном секторе."""
-    wheel, overlay = wheel_parts(coef)
+def pick_spin(coef: int, win: bool) -> tuple[float, float]:
+    """(начальный угол колеса, куда укажет стрелка): градусы по часовой от верха, 0–span — жёлтый сектор."""
     span = 360 / coef
     margin = min(15, span / 4)  # чтобы стрелка не вставала на границу секторов
-    # куда указывает стрелка: градусы по часовой от верха колеса, 0–span — жёлтый сектор
     pointer = random.uniform(margin, span - margin) if win else random.uniform(span + margin, 360 - margin)
-    start = random.uniform(0, 360)
+    return round(random.uniform(0, 360), 3), round(pointer, 3)
+
+
+def render_wheel(coef: int, start: float, pointer: float) -> tuple[bytes, bytes]:
+    """(анимация GIF, финальный кадр PNG). Одинаковые параметры дают одинаковое вращение."""
+    wheel, overlay = wheel_parts(coef)
     distance = 360 * WHEEL_TURNS + (360 - pointer - start) % 360
 
     def frame(angle: float) -> Image.Image:
@@ -581,6 +599,33 @@ def render_wheel(coef: int, win: bool) -> tuple[bytes, bytes]:
                    duration=[WHEEL_FRAME_MS] * (WHEEL_FRAMES - 1) + [WHEEL_HOLD_MS])
     final.save(png, format="PNG", optimize=True)
     return gif.getvalue(), png.getvalue()
+
+
+def peak_memory() -> str:
+    return f"{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024} МБ" if resource else "неизвестно"
+
+
+def replay_view(coef: int, start: float, pointer: float) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(
+        label="Повторить", emoji="🔁", style=discord.ButtonStyle.secondary,
+        custom_id=f"replay:{coef}:{start}:{pointer}",
+    ))
+    return view
+
+
+async def handle_replay(interaction: discord.Interaction, coef: int, start: float, pointer: float) -> None:
+    """Показывает то же вращение ещё раз только нажавшему; на результат не влияет."""
+    log.info("Повтор колеса x%d для %s", coef, interaction.user)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        gif, _ = await asyncio.wait_for(asyncio.to_thread(render_wheel, coef, start, pointer), WHEEL_TIMEOUT)
+        await asyncio.wait_for(
+            interaction.followup.send(file=discord.File(io.BytesIO(gif), "wheel.gif"), ephemeral=True), WHEEL_TIMEOUT
+        )
+    except Exception:
+        log.exception("Повтор колеса не показался")
+        await interaction.followup.send("Не получилось показать повтор, попробуй позже.", ephemeral=True)
 
 
 async def done_summary(interaction: discord.Interaction, counted: int) -> str:
@@ -628,11 +673,16 @@ async def done_ludoman(
     win = random.random() < 1 / coef  # шанс 1/coef: в среднем игра остаётся честной при любом множителе
     applied = coef if win else 0
     counted = amount * applied
+    log.info("Колесо %s: %d × x%d, %s; рисую", interaction.user, amount, coef, "выигрыш" if win else "проигрыш")
+    started = time.monotonic()
+    start, pointer = pick_spin(coef, win)
     gif = png = None
     try:
-        gif, png = await asyncio.wait_for(asyncio.to_thread(render_wheel, coef, win), WHEEL_TIMEOUT)
+        gif, png = await asyncio.wait_for(asyncio.to_thread(render_wheel, coef, start, pointer), WHEEL_TIMEOUT)
+        log.info("Колесо нарисовано за %.1f с, %d КБ, пик памяти %s",
+                 time.monotonic() - started, len(gif) // 1024, peak_memory())
     except Exception as e:
-        print(f"Колесо не нарисовалось: {e!r}")
+        log.exception(f"Колесо не нарисовалось: {e!r}")
     # результат записан до показа: закрытие Discord во время вращения ничего не отменит
     # нулевой результат тоже записываем, иначе проигрыш не попадёт в баланс лудомании
     await add_entry(
@@ -646,17 +696,22 @@ async def done_ludoman(
                         f"x{coef}, шанс {100 / coef:.0f}%…",
                 attachments=[discord.File(io.BytesIO(gif), "wheel.gif")],
             ), WHEEL_TIMEOUT)
+            log.info("Колесо загружено в Discord, прошло %.1f с", time.monotonic() - started)
             await asyncio.sleep(WHEEL_SPIN_SECONDS)
         except Exception as e:
-            print(f"Анимация колеса не загрузилась: {e!r}")
+            log.warning(f"Анимация колеса не загрузилась: {e!r}")
     verdict = f"🤑 Жёлтое! Отжимания умножены на {coef}!" if win else "💀 Мимо! Казино забрало всё."
     text = f"🎰 {amount} × **{applied}** = **{counted}**. {verdict}\n" + await done_summary(interaction, counted)
     try:
         files = [discord.File(io.BytesIO(png), "wheel.png")] if png else []
-        await asyncio.wait_for(interaction.edit_original_response(content=text, attachments=files), WHEEL_TIMEOUT)
+        view = replay_view(coef, start, pointer) if png else None
+        await asyncio.wait_for(
+            interaction.edit_original_response(content=text, attachments=files, view=view), WHEEL_TIMEOUT
+        )
     except Exception as e:
-        print(f"Картинка колеса не загрузилась: {e!r}")
-        await interaction.edit_original_response(content=text, attachments=[])
+        log.warning(f"Картинка колеса не загрузилась: {e!r}")
+        await interaction.edit_original_response(content=text, attachments=[], view=None)
+    log.info("Колесо %s готово за %.1f с", interaction.user, time.monotonic() - started)
     await announce_citizenship(interaction)
 
 
@@ -846,7 +901,7 @@ async def process_new_matches(guild_id: int | None = None) -> tuple[list[dict], 
                 # significant=0 — иначе OpenDota скрывает «незначимые» режимы, например Турбо
                 matches = await opendota("GET", f"/players/{account_id}/matches", date=days, significant=0)
             except Exception as e:
-                print(f"Не удалось получить матчи {account_id}: {e}")
+                log.warning(f"Не удалось получить матчи {account_id}: {e}")
                 failed.append(link["user_id"])
                 continue
             for m in matches:
@@ -921,18 +976,19 @@ def report_embeds(results: list[dict]) -> list[discord.Embed]:
 @tasks.loop(minutes=DOTA_CHECK_MINUTES)
 async def dota_loop() -> None:
     try:
-        results, _ = await process_new_matches()
+        results, failed = await process_new_matches()
+        log.info("Автопроверка Dota: новых результатов %d, ошибок %d", len(results), len(failed))
         if not results or not DOTA_CHANNEL_ID:
             return
         channel = bot.get_channel(int(DOTA_CHANNEL_ID))
         if channel is None:
-            print(f"Канал DOTA_CHANNEL_ID={DOTA_CHANNEL_ID} не найден")
+            log.warning(f"Канал DOTA_CHANNEL_ID={DOTA_CHANNEL_ID} не найден")
             return
         results = [r for r in results if r["guild_id"] == channel.guild.id]
         for embed in report_embeds(results):
             await channel.send(embed=embed)
     except Exception as e:
-        print(f"Ошибка автопроверки Dota: {e!r}")
+        log.exception(f"Ошибка автопроверки Dota: {e!r}")
 
 
 @dota_loop.before_loop
@@ -1121,7 +1177,7 @@ async def process_new_pubg_matches(guild_id: int | None = None) -> tuple[list[di
             try:
                 data = await pubg_api("/players", **{"filter[playerIds]": ",".join(chunk)})
             except Exception as e:
-                print(f"Не удалось получить матчи PUBG: {e}")
+                log.warning(f"Не удалось получить матчи PUBG: {e}")
                 failed += [link["user_id"] for acc in chunk for link in by_account[acc]]
                 continue
             for player in data.get("data", []):
@@ -1141,7 +1197,7 @@ async def process_new_pubg_matches(guild_id: int | None = None) -> tuple[list[di
             try:
                 match = await pubg_api(f"/matches/{match_id}")  # этот эндпоинт не лимитируется
             except Exception as e:
-                print(f"Не удалось получить матч PUBG {match_id}: {e}")
+                log.warning(f"Не удалось получить матч PUBG {match_id}: {e}")
                 continue
             attrs = match["data"]["attributes"]
             played_at = dt.datetime.fromisoformat(attrs["createdAt"].replace("Z", "+00:00"))
@@ -1217,7 +1273,8 @@ def pubg_report_embeds(results: list[dict]) -> list[discord.Embed]:
 @tasks.loop(minutes=DOTA_CHECK_MINUTES)
 async def pubg_loop() -> None:
     try:
-        results, _ = await process_new_pubg_matches()
+        results, failed = await process_new_pubg_matches()
+        log.info("Автопроверка PUBG: новых результатов %d, ошибок %d", len(results), len(failed))
         if not results or not DOTA_CHANNEL_ID:
             return
         channel = bot.get_channel(int(DOTA_CHANNEL_ID))
@@ -1227,7 +1284,7 @@ async def pubg_loop() -> None:
         for embed in pubg_report_embeds(results):
             await channel.send(embed=embed)
     except Exception as e:
-        print(f"Ошибка автопроверки PUBG: {e!r}")
+        log.exception(f"Ошибка автопроверки PUBG: {e!r}")
 
 
 @pubg_loop.before_loop
@@ -1703,12 +1760,13 @@ async def polls_loop() -> None:
             "SELECT * FROM polls WHERE status IN ('open', 'nominating') AND ends_at <= now() ORDER BY ends_at"
         )
         for p in rows:
+            log.info("Подвожу итог голосования #%d (%s)", p["id"], p["kind"])
             if p["status"] == "nominating":
                 await start_election_voting(p)
             else:
                 await resolve_poll(p)
     except Exception as e:
-        print(f"Ошибка подведения итогов голосований: {e!r}")
+        log.exception(f"Ошибка подведения итогов голосований: {e!r}")
 
 
 @polls_loop.before_loop
@@ -1953,7 +2011,7 @@ async def civic_loop() -> None:
             await maybe_run_awards(guild)
             await sync_rank_roles(guild)
         except Exception as e:
-            print(f"Ошибка ролей/наград на {guild.id}: {e!r}")
+            log.exception(f"Ошибка ролей/наград на {guild.id}: {e!r}")
 
 
 @civic_loop.before_loop
@@ -1966,4 +2024,4 @@ if __name__ == "__main__":
         raise SystemExit("Не задан DISCORD_TOKEN (см. .env.example)")
     if not DATABASE_URL:
         raise SystemExit("Не задан DATABASE_URL (см. .env.example)")
-    bot.run(TOKEN)
+    bot.run(TOKEN, root_logger=True)  # root_logger — чтобы логи бота тоже шли в консоль Discloud
