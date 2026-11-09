@@ -166,6 +166,18 @@ CREATE TABLE IF NOT EXISTS award_runs (
     run_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (guild_id, period)
 );
+
+CREATE TABLE IF NOT EXISTS casino_bets (
+    id         TEXT          PRIMARY KEY,
+    guild_id   BIGINT        NOT NULL,
+    user_id    BIGINT        NOT NULL,
+    game       TEXT          NOT NULL,
+    stake      INTEGER       NOT NULL,
+    multiplier NUMERIC(8, 2) NOT NULL,
+    payout     INTEGER       NOT NULL,
+    result     JSONB         NOT NULL,
+    created_at TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
 `
 
 // querier — общее у пула и транзакции (в тестах всё идёт внутри откатываемой транзакции).

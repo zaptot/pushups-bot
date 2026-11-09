@@ -11,6 +11,10 @@ pushbot.zip
 logo.png
 logo.svg
 
+# казино (Discord Activity)
+activity/node_modules/
+activity/dist/
+
 # сборка Go
 pushbot
 pushbot-go.zip
