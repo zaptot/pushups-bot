@@ -74,7 +74,9 @@ func onReady(s *discordgo.Session, ready *discordgo.Ready) {
 }
 
 func main() {
+	log.SetOutput(os.Stdout)
 	log.SetPrefix("[GO] ") // чтобы в логах хостинга было видно, какая версия работает
+	log.Print("Программа стартовала")
 	debug.SetMemoryLimit(memoryLimit)
 	loadConfig()
 	if cfg.Token == "" {
@@ -84,6 +86,8 @@ func main() {
 		log.Fatal("Не задан DATABASE_URL (см. .env.example)")
 	}
 
+	log.Printf("Настройки: длина DISCORD_TOKEN %d, GUILD_ID задан: %v, DATABASE_URL задан: %v", len(cfg.Token), cfg.GuildID != "", cfg.DatabaseURL != "")
+	log.Print("Подключаюсь к базе")
 	pool, err := connectDB(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("Не удалось подключиться к базе: %v", err)
@@ -119,6 +123,7 @@ func main() {
 		handlers[c.def.Name] = c.handler
 		defs = append(defs, c.def)
 	}
+	log.Print("База готова, подключаюсь к Discord")
 	if err := session.Open(); err != nil {
 		log.Fatalf("Не удалось подключиться к Discord: %v", err)
 	}
