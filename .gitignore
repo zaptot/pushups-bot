@@ -10,3 +10,7 @@ pushbot.zip
 # логотип хранится локально
 logo.png
 logo.svg
+
+# сборка Go
+pushbot
+pushbot-go.zip
