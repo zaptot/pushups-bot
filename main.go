@@ -74,6 +74,7 @@ func onReady(s *discordgo.Session, ready *discordgo.Ready) {
 }
 
 func main() {
+	log.SetPrefix("[GO] ") // чтобы в логах хостинга было видно, какая версия работает
 	debug.SetMemoryLimit(memoryLimit)
 	loadConfig()
 	if cfg.Token == "" {
