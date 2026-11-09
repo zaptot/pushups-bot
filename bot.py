@@ -44,6 +44,7 @@ WHEEL_RED = (220, 38, 38)
 WHEEL_RIM = (17, 18, 20)
 WHEEL_ARROW = (245, 245, 245)
 WHEEL_MULTIPLIERS = (2, 3, 5, 10)  # шанс выигрыша — 1 / множитель
+WHEEL_TIMEOUT = 15  # секунд на рисование и на каждую загрузку, потом результат показывается без анимации
 
 # --- Dota 2 ---
 DOTA_CHANNEL_ID = os.getenv("DOTA_CHANNEL_ID")  # куда писать результаты автопроверки
@@ -627,22 +628,35 @@ async def done_ludoman(
     win = random.random() < 1 / coef  # шанс 1/coef: в среднем игра остаётся честной при любом множителе
     applied = coef if win else 0
     counted = amount * applied
-    gif, png = await asyncio.to_thread(render_wheel, coef, win)
+    gif = png = None
+    try:
+        gif, png = await asyncio.wait_for(asyncio.to_thread(render_wheel, coef, win), WHEEL_TIMEOUT)
+    except Exception as e:
+        print(f"Колесо не нарисовалось: {e!r}")
     # результат записан до показа: закрытие Discord во время вращения ничего не отменит
     # нулевой результат тоже записываем, иначе проигрыш не попадёт в баланс лудомании
     await add_entry(
         interaction.guild_id, interaction.user.id, "done", counted, interaction.user.id,
         f"🎰 лудомания: {amount} × {applied:.2f}",
     )
-    await interaction.edit_original_response(
-        content=f"🎡 {interaction.user.mention} крутит колесо на **{amount}** отжиманий: "
-                f"x{coef}, шанс {100 / coef:.0f}%…",
-        attachments=[discord.File(io.BytesIO(gif), "wheel.gif")],
-    )
-    await asyncio.sleep(WHEEL_SPIN_SECONDS)
+    if gif:
+        try:
+            await asyncio.wait_for(interaction.edit_original_response(
+                content=f"🎡 {interaction.user.mention} крутит колесо на **{amount}** отжиманий: "
+                        f"x{coef}, шанс {100 / coef:.0f}%…",
+                attachments=[discord.File(io.BytesIO(gif), "wheel.gif")],
+            ), WHEEL_TIMEOUT)
+            await asyncio.sleep(WHEEL_SPIN_SECONDS)
+        except Exception as e:
+            print(f"Анимация колеса не загрузилась: {e!r}")
     verdict = f"🤑 Жёлтое! Отжимания умножены на {coef}!" if win else "💀 Мимо! Казино забрало всё."
     text = f"🎰 {amount} × **{applied}** = **{counted}**. {verdict}\n" + await done_summary(interaction, counted)
-    await interaction.edit_original_response(content=text, attachments=[discord.File(io.BytesIO(png), "wheel.png")])
+    try:
+        files = [discord.File(io.BytesIO(png), "wheel.png")] if png else []
+        await asyncio.wait_for(interaction.edit_original_response(content=text, attachments=files), WHEEL_TIMEOUT)
+    except Exception as e:
+        print(f"Картинка колеса не загрузилась: {e!r}")
+        await interaction.edit_original_response(content=text, attachments=[])
     await announce_citizenship(interaction)
 
 
