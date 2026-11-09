@@ -6,6 +6,8 @@
 import asyncio
 import collections
 import datetime as dt
+import functools
+import io
 import math
 import os
 import random
@@ -18,6 +20,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
+from PIL import Image, ImageDraw, ImageFont
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -27,6 +30,20 @@ TZ = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))  # для наград «1
 WINDOW_DAYS = 365  # период для лидербордов и остатков
 TOP_SIZE = 15
 DONE_MIN = 10  # меньше за раз записать через /done нельзя
+
+# --- колесо /done_ludoman ---
+WHEEL_SIZE = 320
+WHEEL_FRAMES = 105
+WHEEL_FRAME_MS = 30  # в GIF шаг 10 мс, а задержки ≤ 10 мс браузеры замедляют до 100 мс
+WHEEL_HOLD_MS = 1500  # пауза на последнем кадре
+WHEEL_TURNS = 4
+WHEEL_SPIN_SECONDS = (WHEEL_FRAMES * WHEEL_FRAME_MS + WHEEL_HOLD_MS) / 1000 + 1  # +1 с на загрузку у зрителей
+WHEEL_BG = (35, 36, 40)
+WHEEL_YELLOW = (250, 204, 21)
+WHEEL_RED = (220, 38, 38)
+WHEEL_RIM = (17, 18, 20)
+WHEEL_ARROW = (245, 245, 245)
+WHEEL_MULTIPLIERS = (2, 3, 5, 10)  # шанс выигрыша — 1 / множитель
 
 # --- Dota 2 ---
 DOTA_CHANNEL_ID = os.getenv("DOTA_CHANNEL_ID")  # куда писать результаты автопроверки
@@ -494,39 +511,139 @@ async def owe(
     await interaction.response.send_message(text)
 
 
-@bot.tree.command(name="done", description="Записать сделанные отжимания")
-@app_commands.describe(amount=f"Сколько отжиманий сделал (минимум {DONE_MIN})")
-async def done(interaction: discord.Interaction, amount: app_commands.Range[int, DONE_MIN, 10000]) -> None:
-    await record_done(interaction, amount, ludoman=False)
+@functools.cache
+def wheel_parts(coef: int) -> tuple[Image.Image, Image.Image]:
+    """Колесо (жёлтый сектор 1/coef по часовой от верха) и неподвижный слой со стрелкой и осью.
+
+    Рисуем вдвое крупнее и сжимаем.
+    """
+    s = WHEEL_SIZE * 2
+    c = s // 2
+    r = c - 56
+    box = (c - r, c - r, c + r, c + r)
+    span = 360 / coef
+
+    wheel = Image.new("RGB", (s, s), WHEEL_BG)
+    d = ImageDraw.Draw(wheel)
+    d.pieslice(box, -90, -90 + span, fill=WHEEL_YELLOW)
+    d.pieslice(box, -90 + span, 270, fill=WHEEL_RED)
+    for i in range(24):  # засечки, чтобы вращение было заметно
+        a = math.radians(i * 15)
+        inner = r - (36 if i % 2 else 20)
+        d.line(
+            (c + inner * math.cos(a), c + inner * math.sin(a), c + r * math.cos(a), c + r * math.sin(a)),
+            fill=WHEEL_RIM, width=6,
+        )
+    d.ellipse(box, outline=WHEEL_RIM, width=14)
+    font = ImageFont.load_default(size=s // 8 if coef < 5 else s // 11)
+    def label(text: str, mid: float, distance: float, fill: tuple[int, int, int]) -> None:
+        a = math.radians(mid)
+        d.text((c + distance * math.cos(a), c + distance * math.sin(a)), text, font=font, fill=fill, anchor="mm")
+
+    label(f"x{coef}", -90 + span / 2, r * (0.55 if coef < 5 else 0.72), WHEEL_RIM)
+    label("x0", -90 + span + (360 - span) / 2, r * 0.55, (255, 255, 255))
+
+    overlay = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(overlay)
+    d.ellipse((c - 40, c - 40, c + 40, c + 40), fill=WHEEL_RIM)
+    d.polygon([(c - 36, 6), (c + 36, 6), (c, 56 + 64)], fill=WHEEL_ARROW, outline=WHEEL_RIM, width=4)
+
+    size = (WHEEL_SIZE, WHEEL_SIZE)
+    return wheel.resize(size, Image.Resampling.LANCZOS), overlay.resize(size, Image.Resampling.LANCZOS)
 
 
-@bot.tree.command(name="done_ludoman", description="Записать отжимания × случайный коэффициент от 0 до 2 🎰")
-@app_commands.describe(amount=f"Сколько отжиманий сделал (минимум {DONE_MIN})")
-async def done_ludoman(interaction: discord.Interaction, amount: app_commands.Range[int, DONE_MIN, 10000]) -> None:
-    await record_done(interaction, amount, ludoman=True)
+def render_wheel(coef: int, win: bool) -> tuple[bytes, bytes]:
+    """(анимация GIF, финальный кадр PNG). Колесо останавливается стрелкой на нужном секторе."""
+    wheel, overlay = wheel_parts(coef)
+    span = 360 / coef
+    margin = min(15, span / 4)  # чтобы стрелка не вставала на границу секторов
+    # куда указывает стрелка: градусы по часовой от верха колеса, 0–span — жёлтый сектор
+    pointer = random.uniform(margin, span - margin) if win else random.uniform(span + margin, 360 - margin)
+    start = random.uniform(0, 360)
+    distance = 360 * WHEEL_TURNS + (360 - pointer - start) % 360
+
+    def frame(angle: float) -> Image.Image:
+        image = wheel.rotate(-angle, resample=Image.Resampling.BICUBIC, fillcolor=WHEEL_BG)
+        image.paste(overlay, (0, 0), overlay)
+        return image
+
+    final = frame(start + distance)
+    palette = final.quantize(colors=64, dither=Image.Dither.NONE)
+    frames = []
+    for i in range(WHEEL_FRAMES):
+        t = i / (WHEEL_FRAMES - 1)
+        frames.append(frame(start + distance * (1 - (1 - t) ** 3)).quantize(palette=palette, dither=Image.Dither.NONE))
+
+    gif, png = io.BytesIO(), io.BytesIO()
+    # без параметра loop анимация проигрывается один раз
+    frames[0].save(gif, format="GIF", save_all=True, append_images=frames[1:], disposal=1,
+                   duration=[WHEEL_FRAME_MS] * (WHEEL_FRAMES - 1) + [WHEEL_HOLD_MS])
+    final.save(png, format="PNG", optimize=True)
+    return gif.getvalue(), png.getvalue()
 
 
-async def record_done(interaction: discord.Interaction, amount: int, ludoman: bool) -> None:
-    if interaction.guild_id is None:
-        await interaction.response.send_message(no_guild_reply(), ephemeral=True)
-        return
-    counted, reason, gamble_line = amount, None, ""
-    if ludoman:
-        coef = round(random.uniform(0, 2), 2)
-        counted = round(amount * coef)
-        reason = f"🎰 лудомания: {amount} × {coef:.2f}"
-        mood = "🤑 Казино в плюсе!" if coef > 1 else ("💀 Казино забрало всё." if counted == 0 else "📉 Казино в минусе.")
-        gamble_line = f"🎰 Лудомания: {amount} × **{coef:.2f}** = **{counted}**. {mood}\n"
-    # записываем и нулевой результат, иначе проигрыш не попадёт в баланс лудомании
-    await add_entry(interaction.guild_id, interaction.user.id, "done", counted, interaction.user.id, reason)
+async def done_summary(interaction: discord.Interaction, counted: int) -> str:
     _, done_total, remaining = await user_stats(interaction.guild_id, interaction.user.id)
-    text = gamble_line + f"✅ {interaction.user.mention} засчитано **{counted}** отжиманий (за год: {done_total})\n"
-    text += f"Осталось: **{remaining}**" if remaining else "Долгов нет — красавчик! 🏆"
-    await interaction.response.send_message(text)
+    text = f"✅ {interaction.user.mention} засчитано **{counted}** отжиманий (за год: {done_total})\n"
+    return text + (f"Осталось: **{remaining}**" if remaining else "Долгов нет — красавчик! 🏆")
+
+
+async def announce_citizenship(interaction: discord.Interaction) -> None:
     # возможно, теперь выполнены условия гражданства
     became, note = await try_naturalize(interaction.guild, interaction.user.id)
     if became:
         await interaction.followup.send(note)
+
+
+@bot.tree.command(name="done", description="Записать сделанные отжимания")
+@app_commands.describe(amount=f"Сколько отжиманий сделал (минимум {DONE_MIN})")
+async def done(interaction: discord.Interaction, amount: app_commands.Range[int, DONE_MIN, 10000]) -> None:
+    if interaction.guild_id is None:
+        await interaction.response.send_message(no_guild_reply(), ephemeral=True)
+        return
+    await add_entry(interaction.guild_id, interaction.user.id, "done", amount, interaction.user.id, None)
+    await interaction.response.send_message(await done_summary(interaction, amount))
+    await announce_citizenship(interaction)
+
+
+@bot.tree.command(name="done_ludoman", description="Крутить колесо: выбери множитель — чем он выше, тем меньше жёлтого 🎡")
+@app_commands.describe(
+    amount=f"Сколько отжиманий сделал (минимум {DONE_MIN})",
+    multiplier="Во сколько раз умножатся отжимания при выигрыше (по умолчанию x2)",
+)
+@app_commands.choices(
+    multiplier=[app_commands.Choice(name=f"x{c} — шанс {100 / c:.0f}%", value=c) for c in WHEEL_MULTIPLIERS]
+)
+async def done_ludoman(
+    interaction: discord.Interaction,
+    amount: app_commands.Range[int, DONE_MIN, 10000],
+    multiplier: app_commands.Choice[int] | None = None,
+) -> None:
+    if interaction.guild_id is None:
+        await interaction.response.send_message(no_guild_reply(), ephemeral=True)
+        return
+    await interaction.response.defer()
+    coef = multiplier.value if multiplier else WHEEL_MULTIPLIERS[0]
+    win = random.random() < 1 / coef  # шанс 1/coef: в среднем игра остаётся честной при любом множителе
+    applied = coef if win else 0
+    counted = amount * applied
+    gif, png = await asyncio.to_thread(render_wheel, coef, win)
+    # результат записан до показа: закрытие Discord во время вращения ничего не отменит
+    # нулевой результат тоже записываем, иначе проигрыш не попадёт в баланс лудомании
+    await add_entry(
+        interaction.guild_id, interaction.user.id, "done", counted, interaction.user.id,
+        f"🎰 лудомания: {amount} × {applied:.2f}",
+    )
+    await interaction.edit_original_response(
+        content=f"🎡 {interaction.user.mention} крутит колесо на **{amount}** отжиманий: "
+                f"x{coef}, шанс {100 / coef:.0f}%…",
+        attachments=[discord.File(io.BytesIO(gif), "wheel.gif")],
+    )
+    await asyncio.sleep(WHEEL_SPIN_SECONDS)
+    verdict = f"🤑 Жёлтое! Отжимания умножены на {coef}!" if win else "💀 Мимо! Казино забрало всё."
+    text = f"🎰 {amount} × **{applied}** = **{counted}**. {verdict}\n" + await done_summary(interaction, counted)
+    await interaction.edit_original_response(content=text, attachments=[discord.File(io.BytesIO(png), "wheel.png")])
+    await announce_citizenship(interaction)
 
 
 @bot.tree.command(name="status", description="Сколько отжиманий осталось и сделано")
