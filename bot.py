@@ -5,8 +5,10 @@
 
 import asyncio
 import collections
+import ctypes
 import datetime as dt
 import functools
+import gc
 import io
 import logging
 import math
@@ -27,10 +29,16 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
-from PIL import Image, ImageDraw, ImageFont
 
 load_dotenv()
 log = logging.getLogger("pushbot")
+
+# Лимит памяти на хостинге 100 МБ: держим меньше областей malloc и отдаём память системе (только Linux с glibc)
+try:
+    LIBC = ctypes.CDLL("libc.so.6")
+    LIBC.mallopt(-8, 2)  # M_ARENA_MAX
+except OSError:
+    LIBC = None
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = os.getenv("GUILD_ID")  # необязательно: команды появятся на сервере мгновенно
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -41,6 +49,7 @@ DONE_MIN = 10  # меньше за раз записать через /done не
 
 # --- колесо /done_ludoman ---
 WHEEL_SIZE = 320
+WHEEL_DISC_BOX = (26, 26, WHEEL_SIZE - 26, WHEEL_SIZE - 26)  # квадрат вокруг колеса
 WHEEL_FRAMES = 105
 WHEEL_FRAME_MS = 30  # в GIF шаг 10 мс, а задержки ≤ 10 мс браузеры замедляют до 100 мс
 WHEEL_HOLD_MS = 1500  # пауза на последнем кадре
@@ -262,7 +271,10 @@ CREATE TABLE IF NOT EXISTS award_runs (
 
 class PushupBot(discord.Client):
     def __init__(self) -> None:
-        super().__init__(intents=discord.Intents.default())
+        # боту нужны только серверы и каналы: команды и кнопки приходят с полными данными участника
+        intents = discord.Intents.none()
+        intents.guilds = True
+        super().__init__(intents=intents, max_messages=None, member_cache_flags=discord.MemberCacheFlags.none())
         self.tree = app_commands.CommandTree(self)
         self.pool: asyncpg.Pool | None = None
         self.http_session: aiohttp.ClientSession | None = None
@@ -299,7 +311,7 @@ class PushupBot(discord.Client):
         await super().close()
 
     async def on_ready(self) -> None:
-        log.info(f"Запущен как {self.user} (id {self.user.id})")
+        log.info("Запущен как %s (id %s), память %s", self.user, self.user.id, memory_usage())
 
     async def on_app_command_completion(self, interaction: discord.Interaction, command: app_commands.Command) -> None:
         log.info("Команда /%s от %s выполнена", command.name, interaction.user)
@@ -528,11 +540,13 @@ async def owe(
 
 
 @functools.cache
-def wheel_parts(coef: int) -> tuple[Image.Image, Image.Image]:
+def wheel_parts(coef: int) -> tuple["Image.Image", "Image.Image"]:
     """Колесо (жёлтый сектор 1/coef по часовой от верха) и неподвижный слой со стрелкой и осью.
 
     Рисуем вдвое крупнее и сжимаем.
     """
+    from PIL import Image, ImageDraw, ImageFont  # Pillow грузим только когда кто-то крутит колесо
+
     s = WHEEL_SIZE * 2
     c = s // 2
     r = c - 56
@@ -578,11 +592,16 @@ def pick_spin(coef: int, win: bool) -> tuple[float, float]:
 
 def render_wheel(coef: int, start: float, pointer: float) -> tuple[bytes, bytes]:
     """(анимация GIF, финальный кадр PNG). Одинаковые параметры дают одинаковое вращение."""
+    from PIL import Image
+
     wheel, overlay = wheel_parts(coef)
     distance = 360 * WHEEL_TURNS + (360 - pointer - start) % 360
 
-    def frame(angle: float) -> Image.Image:
-        image = wheel.rotate(-angle, resample=Image.Resampling.BICUBIC, fillcolor=WHEEL_BG)
+    def frame(angle: float) -> "Image.Image":
+        # вращаем только квадрат с колесом: углы картинки всегда одного цвета
+        image = Image.new("RGB", wheel.size, WHEEL_BG)
+        disc = wheel.crop(WHEEL_DISC_BOX).rotate(-angle, resample=Image.Resampling.BILINEAR, fillcolor=WHEEL_BG)
+        image.paste(disc, WHEEL_DISC_BOX[:2])
         image.paste(overlay, (0, 0), overlay)
         return image
 
@@ -601,8 +620,18 @@ def render_wheel(coef: int, start: float, pointer: float) -> tuple[bytes, bytes]
     return gif.getvalue(), png.getvalue()
 
 
-def peak_memory() -> str:
-    return f"{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024} МБ" if resource else "неизвестно"
+def trim_memory() -> None:
+    gc.collect()
+    if LIBC:
+        LIBC.malloc_trim(0)
+
+
+def memory_usage() -> str:
+    if not resource:
+        return "неизвестно"
+    with open("/proc/self/statm") as f:
+        current = int(f.read().split()[1]) * resource.getpagesize() // 1024**2
+    return f"{current} МБ, пик {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024} МБ"
 
 
 def replay_view(coef: int, start: float, pointer: float) -> discord.ui.View:
@@ -626,6 +655,8 @@ async def handle_replay(interaction: discord.Interaction, coef: int, start: floa
     except Exception:
         log.exception("Повтор колеса не показался")
         await interaction.followup.send("Не получилось показать повтор, попробуй позже.", ephemeral=True)
+    gif = None
+    trim_memory()
 
 
 async def done_summary(interaction: discord.Interaction, counted: int) -> str:
@@ -679,8 +710,8 @@ async def done_ludoman(
     gif = png = None
     try:
         gif, png = await asyncio.wait_for(asyncio.to_thread(render_wheel, coef, start, pointer), WHEEL_TIMEOUT)
-        log.info("Колесо нарисовано за %.1f с, %d КБ, пик памяти %s",
-                 time.monotonic() - started, len(gif) // 1024, peak_memory())
+        log.info("Колесо нарисовано за %.1f с, %d КБ, память %s",
+                 time.monotonic() - started, len(gif) // 1024, memory_usage())
     except Exception as e:
         log.exception(f"Колесо не нарисовалось: {e!r}")
     # результат записан до показа: закрытие Discord во время вращения ничего не отменит
@@ -711,7 +742,9 @@ async def done_ludoman(
     except Exception as e:
         log.warning(f"Картинка колеса не загрузилась: {e!r}")
         await interaction.edit_original_response(content=text, attachments=[], view=None)
-    log.info("Колесо %s готово за %.1f с", interaction.user, time.monotonic() - started)
+    gif = png = None
+    trim_memory()
+    log.info("Колесо %s готово за %.1f с, память %s", interaction.user, time.monotonic() - started, memory_usage())
     await announce_citizenship(interaction)
 
 
@@ -977,7 +1010,8 @@ def report_embeds(results: list[dict]) -> list[discord.Embed]:
 async def dota_loop() -> None:
     try:
         results, failed = await process_new_matches()
-        log.info("Автопроверка Dota: новых результатов %d, ошибок %d", len(results), len(failed))
+        trim_memory()
+        log.info("Автопроверка Dota: новых результатов %d, ошибок %d, память %s", len(results), len(failed), memory_usage())
         if not results or not DOTA_CHANNEL_ID:
             return
         channel = bot.get_channel(int(DOTA_CHANNEL_ID))
@@ -1274,7 +1308,8 @@ def pubg_report_embeds(results: list[dict]) -> list[discord.Embed]:
 async def pubg_loop() -> None:
     try:
         results, failed = await process_new_pubg_matches()
-        log.info("Автопроверка PUBG: новых результатов %d, ошибок %d", len(results), len(failed))
+        trim_memory()
+        log.info("Автопроверка PUBG: новых результатов %d, ошибок %d, память %s", len(results), len(failed), memory_usage())
         if not results or not DOTA_CHANNEL_ID:
             return
         channel = bot.get_channel(int(DOTA_CHANNEL_ID))
