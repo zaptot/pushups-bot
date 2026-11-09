@@ -323,9 +323,7 @@ class PushupBot(discord.Client):
         if interaction.type != discord.InteractionType.component:
             return
         parts = (interaction.data or {}).get("custom_id", "").split(":")
-        if parts[0] == "replay" and len(parts) == 4:
-            await handle_replay(interaction, int(parts[1]), float(parts[2]), float(parts[3]))
-        elif parts[0] == "vote" and len(parts) == 3:
+        if parts[0] == "vote" and len(parts) == 3:
             await handle_vote(interaction, int(parts[1]), parts[2])
         elif parts[0] == "elect" and len(parts) == 2:
             values = (interaction.data or {}).get("values") or []
@@ -591,7 +589,7 @@ def pick_spin(coef: int, win: bool) -> tuple[float, float]:
 
 
 def render_wheel(coef: int, start: float, pointer: float) -> tuple[bytes, bytes]:
-    """(анимация GIF, финальный кадр PNG). Одинаковые параметры дают одинаковое вращение."""
+    """(анимация GIF, финальный кадр PNG)."""
     from PIL import Image
 
     wheel, overlay = wheel_parts(coef)
@@ -632,31 +630,6 @@ def memory_usage() -> str:
     with open("/proc/self/statm") as f:
         current = int(f.read().split()[1]) * resource.getpagesize() // 1024**2
     return f"{current} МБ, пик {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024} МБ"
-
-
-def replay_view(coef: int, start: float, pointer: float) -> discord.ui.View:
-    view = discord.ui.View(timeout=None)
-    view.add_item(discord.ui.Button(
-        label="Повторить", emoji="🔁", style=discord.ButtonStyle.secondary,
-        custom_id=f"replay:{coef}:{start}:{pointer}",
-    ))
-    return view
-
-
-async def handle_replay(interaction: discord.Interaction, coef: int, start: float, pointer: float) -> None:
-    """Показывает то же вращение ещё раз только нажавшему; на результат не влияет."""
-    log.info("Повтор колеса x%d для %s", coef, interaction.user)
-    await interaction.response.defer(ephemeral=True)
-    try:
-        gif, _ = await asyncio.wait_for(asyncio.to_thread(render_wheel, coef, start, pointer), WHEEL_TIMEOUT)
-        await asyncio.wait_for(
-            interaction.followup.send(file=discord.File(io.BytesIO(gif), "wheel.gif"), ephemeral=True), WHEEL_TIMEOUT
-        )
-    except Exception:
-        log.exception("Повтор колеса не показался")
-        await interaction.followup.send("Не получилось показать повтор, попробуй позже.", ephemeral=True)
-    gif = None
-    trim_memory()
 
 
 async def done_summary(interaction: discord.Interaction, counted: int) -> str:
@@ -720,6 +693,7 @@ async def done_ludoman(
         interaction.guild_id, interaction.user.id, "done", counted, interaction.user.id,
         f"🎰 лудомания: {amount} × {applied:.2f}",
     )
+    gif_shown = False
     if gif:
         try:
             await asyncio.wait_for(interaction.edit_original_response(
@@ -728,20 +702,19 @@ async def done_ludoman(
                 attachments=[discord.File(io.BytesIO(gif), "wheel.gif")],
             ), WHEEL_TIMEOUT)
             log.info("Колесо загружено в Discord, прошло %.1f с", time.monotonic() - started)
+            gif_shown = True
             await asyncio.sleep(WHEEL_SPIN_SECONDS)
         except Exception as e:
             log.warning(f"Анимация колеса не загрузилась: {e!r}")
     verdict = f"🤑 Жёлтое! Отжимания умножены на {coef}!" if win else "💀 Мимо! Казино забрало всё."
     text = f"🎰 {amount} × **{applied}** = **{counted}**. {verdict}\n" + await done_summary(interaction, counted)
     try:
-        files = [discord.File(io.BytesIO(png), "wheel.png")] if png else []
-        view = replay_view(coef, start, pointer) if png else None
-        await asyncio.wait_for(
-            interaction.edit_original_response(content=text, attachments=files, view=view), WHEEL_TIMEOUT
-        )
+        # гифка остаётся в сообщении; картинка нужна, только если гифка не загрузилась
+        attachments = {} if gif_shown else {"attachments": [discord.File(io.BytesIO(png), "wheel.png")] if png else []}
+        await asyncio.wait_for(interaction.edit_original_response(content=text, **attachments), WHEEL_TIMEOUT)
     except Exception as e:
         log.warning(f"Картинка колеса не загрузилась: {e!r}")
-        await interaction.edit_original_response(content=text, attachments=[], view=None)
+        await interaction.edit_original_response(content=text, **({} if gif_shown else {"attachments": []}))
     gif = png = None
     trim_memory()
     log.info("Колесо %s готово за %.1f с, память %s", interaction.user, time.monotonic() - started, memory_usage())
