@@ -40,6 +40,61 @@ const shakeAmp = (m: number): number =>
 
 const jitter = (amp: number): number => (Math.random() * 2 - 1) * amp;
 
+interface Star {
+  x: number;
+  y: number;
+  r: number;
+  depth: number;
+  phase: number;
+}
+
+const stars: Star[] = Array.from({ length: 70 }, () => ({
+  x: Math.random() * width,
+  y: Math.random() * height,
+  r: 0.4 + Math.random() * 1.2,
+  depth: 0.2 + Math.random() * 0.8,
+  phase: Math.random() * Math.PI * 2,
+}));
+const starDrift = 14;
+const trailSteps = 10;
+const trailGap = 0.12;
+const sparks = 5;
+
+const wrap = (v: number, size: number): number => ((v % size) + size) % size;
+
+function drawStars(ctx: CanvasRenderingContext2D, seconds: number, m: number): void {
+  const travel = reducedMotion.matches ? 0 : (seconds + 6 * (m - 1)) * starDrift;
+  const now = performance.now() / 1000;
+  ctx.fillStyle = colors.text;
+  for (const star of stars) {
+    ctx.globalAlpha = (0.35 + 0.65 * Math.abs(Math.sin(now * 1.5 + star.phase))) * star.depth;
+    ctx.beginPath();
+    ctx.arc(wrap(star.x - travel * star.depth, width), wrap(star.y + travel * star.depth * 0.6, height), star.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawTrail(ctx: CanvasRenderingContext2D, scale: Scale, growth: number, seconds: number): void {
+  for (let i = trailSteps; i >= 1; i--) {
+    const s = seconds - i * trailGap;
+    if (s <= 0) {
+      continue;
+    }
+    const fade = 1 - i / (trailSteps + 1);
+    const r = 6 + (trailSteps - i) * 1.6;
+    const px = scale.x(s) + jitter(1.5);
+    const py = scale.y(Math.exp(growth * s)) + jitter(1.5);
+    const glow = ctx.createRadialGradient(px, py, 0, px, py, r);
+    glow.addColorStop(0, `rgb(251 146 60 / ${Math.round(fade * 60)}%)`);
+    glow.addColorStop(1, 'rgb(251 146 60 / 0%)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 function drawRocket(ctx: CanvasRenderingContext2D, px: number, py: number, heading: number, m: number, phase: Phase): void {
   const size = rocketBase * rocketScale(m);
   const half = size / 2;
@@ -70,6 +125,14 @@ function drawRocket(ctx: CanvasRenderingContext2D, px: number, py: number, headi
     ctx.beginPath();
     ctx.arc(fx, 0, r, 0, Math.PI * 2);
     ctx.fill();
+    ctx.fillStyle = 'rgb(254 240 138)';
+    for (let i = 0; i < sparks; i++) {
+      ctx.globalAlpha = 0.4 + Math.random() * 0.6;
+      ctx.beginPath();
+      ctx.arc(fx - Math.random() * half * 1.4, jitter(half * 0.35), 0.8 + Math.random() * 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
   // эмодзи 🚀 нарисовано носом вправо-вверх, разворачиваем его по курсу
   ctx.rotate(Math.PI / 4);
@@ -128,6 +191,7 @@ function draw(
     y: (m) => height - pad - ((m - 1) / (yMax - 1)) * (height - 2 * pad),
   };
   const { x, y } = scale;
+  drawStars(ctx, seconds, Math.exp(growth * seconds));
 
   ctx.strokeStyle = colors.axis;
   ctx.lineWidth = 1;
@@ -145,6 +209,9 @@ function draw(
     cashMark(ctx, x(cashSeconds), y(cashedAt), cashedAt);
   }
 
+  if (phase === 'flying') {
+    drawTrail(ctx, scale, growth, seconds);
+  }
   if (phase !== 'idle') {
     const m = Math.exp(growth * seconds);
     // направление полёта — касательная к кривой в экранных координатах
