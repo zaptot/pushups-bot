@@ -23,6 +23,60 @@ const multiplierAt = (growth: number, seconds: number): number => Math.floor(Mat
 
 const secondsTo = (growth: number, m: number): number => Math.log(m) / growth;
 
+const rocketBase = 28;
+const rocketGrowth = 0.45;
+const rocketScaleMax = 2.4;
+const shakeFrom = 1.3;
+const shakePerLog = 2.5;
+const shakeMax = 6;
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+/** Чем выше множитель, тем ракета крупнее и сильнее трясётся. */
+const rocketScale = (m: number): number => Math.min(rocketScaleMax, 1 + rocketGrowth * Math.log(m));
+
+const shakeAmp = (m: number): number =>
+  reducedMotion.matches ? 0 : Math.min(shakeMax, Math.max(0, Math.log(m / shakeFrom)) * shakePerLog);
+
+const jitter = (amp: number): number => (Math.random() * 2 - 1) * amp;
+
+function drawRocket(ctx: CanvasRenderingContext2D, px: number, py: number, heading: number, m: number, phase: Phase): void {
+  const size = rocketBase * rocketScale(m);
+  const half = size / 2;
+  const amp = phase === 'flying' ? shakeAmp(m) : 0;
+  ctx.save();
+  ctx.translate(
+    Math.min(width - half, Math.max(half, px)) + jitter(amp),
+    Math.min(height - half, Math.max(half, py)) + jitter(amp),
+  );
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if (phase === 'crashed') {
+    ctx.font = `${size * 1.2}px system-ui, sans-serif`;
+    ctx.fillText('💥', 0, 0);
+    ctx.restore();
+    return;
+  }
+  ctx.rotate(heading + jitter(amp * 0.02));
+  if (phase === 'flying') {
+    // пламя за хвостом, мерцает и растёт вместе с ракетой
+    const r = half * (0.55 + Math.random() * 0.25);
+    const fx = -half * 0.75;
+    const flame = ctx.createRadialGradient(fx, 0, 0, fx, 0, r);
+    flame.addColorStop(0, 'rgb(255 244 200 / 95%)');
+    flame.addColorStop(0.4, 'rgb(251 146 60 / 75%)');
+    flame.addColorStop(1, 'rgb(220 38 38 / 0%)');
+    ctx.fillStyle = flame;
+    ctx.beginPath();
+    ctx.arc(fx, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // эмодзи 🚀 нарисовано носом вправо-вверх, разворачиваем его по курсу
+  ctx.rotate(Math.PI / 4);
+  ctx.font = `${size}px system-ui, sans-serif`;
+  ctx.fillText('🚀', 0, 0);
+  ctx.restore();
+}
+
 function draw(ctx: CanvasRenderingContext2D, growth: number, seconds: number, phase: Phase, shown: number): void {
   ctx.clearRect(0, 0, width, height);
   const xMax = Math.max(8, seconds * 1.15);
@@ -55,10 +109,11 @@ function draw(ctx: CanvasRenderingContext2D, growth: number, seconds: number, ph
   ctx.stroke();
 
   if (phase !== 'idle') {
-    ctx.font = '28px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(phase === 'crashed' ? '💥' : '🚀', x(seconds), y(Math.exp(growth * seconds)));
+    const m = Math.exp(growth * seconds);
+    // направление полёта — касательная к кривой в экранных координатах
+    const dx = (width - 2 * pad) / xMax;
+    const dy = (-growth * m * (height - 2 * pad)) / (yMax - 1);
+    drawRocket(ctx, x(seconds), y(m), Math.atan2(dy, dx), m, phase);
   }
 
   ctx.fillStyle = phase === 'idle' ? colors.muted : accent;
