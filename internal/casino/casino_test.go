@@ -400,6 +400,7 @@ func TestCasinoRocket(t *testing.T) {
 		{1.4, 1.5, 1.4, "crashed", 0},
 		{1.5, 1.5, 1.5, "crashed", 0},
 		{1, 0, 1, "crashed", 0},
+		{rocketMax, rocketAutoMax, rocketMax, "won", rocketAutoMax},
 	}
 	for _, c := range outcomes {
 		if status, mult := rocketOutcome(c.crash, c.auto, c.m); status != c.status || mult != c.mult {
@@ -478,6 +479,11 @@ func TestCasinoReplay(t *testing.T) {
 	}
 	if code, out := casinoCall(t, mux, "POST", "/api/shop/buy", token, map[string]any{"item": "voucher"}); code != http.StatusUnprocessableEntity {
 		t.Fatalf("покупка без денег: %d %v", code, out)
+	}
+	for _, auto := range []float64{1, 100} {
+		if code, out := casinoCall(t, mux, "POST", "/api/rocket", token, map[string]any{"stake": 30, "auto": auto}); code != http.StatusUnprocessableEntity {
+			t.Fatalf("автовывод x%.2f: ждали 422, получили %d %v", auto, code, out)
+		}
 	}
 	code, out := casinoCall(t, mux, "POST", "/api/rocket", token, map[string]any{"stake": 30, "auto": 0})
 	if code != http.StatusOK {
