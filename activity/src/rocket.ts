@@ -9,7 +9,7 @@ const height = 300;
 const pad = 28;
 const samples = 80;
 const autoMin = 1.01;
-const autoMax = 100;
+const autoMax = 99.99;
 const colors = {
   axis: '#3f4147',
   line: '#facc15',

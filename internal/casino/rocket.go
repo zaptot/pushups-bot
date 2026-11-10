@@ -16,6 +16,7 @@ const (
 	rocketGrowth  = 0.06
 	rocketMax     = 100.0
 	rocketAutoMin = 1.01
+	rocketAutoMax = 99.99 // на x100 ракета всегда взрывается (потолок crashPoint), выигрыш невозможен
 	rocketWait    = 25 * time.Second
 	rocketKeep    = time.Minute
 )
@@ -104,8 +105,8 @@ func handleRocketStart(w http.ResponseWriter, r *http.Request, p player) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	if req.Auto != 0 && (req.Auto < rocketAutoMin || req.Auto > rocketMax) {
-		writeError(w, http.StatusUnprocessableEntity, "Автовывод — от x1.01 до x100")
+	if req.Auto != 0 && (req.Auto < rocketAutoMin || req.Auto > rocketAutoMax) {
+		writeError(w, http.StatusUnprocessableEntity, "Автовывод — от x1.01 до x99.99")
 		return
 	}
 	rocketMu.Lock()
