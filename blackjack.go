@@ -103,7 +103,7 @@ func (h *blackjackHand) draw() card {
 }
 
 func (h *blackjackHand) canDouble() bool {
-	return h.Status == "playing" && len(h.Player) == 2
+	return h.Status == "playing" && len(h.Player) == 2 && h.Stake*2 <= stakeMax
 }
 
 func (h *blackjackHand) act(action string) error {
@@ -243,6 +243,9 @@ func handleBlackjackStart(w http.ResponseWriter, r *http.Request, p player) {
 	defer blackjackMu.Unlock()
 	if blackjackHands[key] != nil {
 		writeError(w, http.StatusConflict, "Сначала доиграй текущую партию")
+		return
+	}
+	if tooFast(w, p) {
 		return
 	}
 	h := newBlackjackHand(randomID(16), p, req.Stake, shuffledDeck())

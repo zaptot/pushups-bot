@@ -4,7 +4,7 @@
 
 Ошибки: `4xx/5xx` с телом `{ "error": "текст для игрока" }`. `401` — нужна новая сессия, `409` — уже есть активная партия/ракета, `422` — неверная ставка или параметры.
 
-После каждого итога в ответе есть `payout` (засчитано) и `remaining` (сколько отжиманий осталось по статистике бота).
+После каждого итога в ответе есть `multiplier` и `payout` (выигрыш в фантиках). `429` — слишком частые ставки (не больше одной новой ставки в секунду).
 
 ## Вход
 
@@ -25,7 +25,7 @@
 { "id": "uuid", "stake": 20, "bet": { "kind": "red" } }
 ```
 `kind`: `red | black | even | odd | low | high | dozen | number`; `value` для `dozen` (1–3) и `number` (0–36).
-→ `{ "number": 17, "multiplier": 0, "payout": 0, "remaining": 120 }`
+→ `{ "number": 17, "multiplier": 0, "payout": 0 }`
 
 Повтор с тем же `id` возвращает тот же ответ без нового начисления.
 
@@ -38,7 +38,7 @@
 ```json
 { "id": "uuid", "stake": 37, "rows": 8, "risk": "low" }
 ```
-→ `{ "path": [0,1,1,0,1,0,0,1], "slot": 4, "multiplier": 0.62, "payout": 23, "remaining": 97 }`
+→ `{ "path": [0,1,1,0,1,0,0,1], "slot": 4, "multiplier": 0.62, "payout": 23 }`
 
 ## Блэкджек
 
@@ -53,7 +53,7 @@
   "canDouble": true
 }
 ```
-`status`: `playing | blackjack | win | push | lose | bust`. При итоге добавляются `multiplier`, `payout`, `remaining`, и карты дилера раскрыты.
+`status`: `playing | blackjack | win | push | lose | bust`. При итоге добавляются `multiplier`, `payout`, и карты дилера раскрыты.
 
 ### `GET /api/blackjack` → состояние активной партии или `204`
 ### `POST /api/blackjack` `{ "stake": 20 }` → состояние (`409`, если партия уже идёт)
@@ -69,8 +69,8 @@
 → `{ "id": "round-id", "growth": 0.06, "maxMultiplier": 100 }`. Клиент анимирует `e^(growth·t)` от момента ответа.
 
 ### `POST /api/rocket/cashout` `{ "id": "round-id" }`
-→ `{ "status": "won", "multiplier": 2.03, "crash": 3.41, "payout": 101, "remaining": 40 }`
-или `{ "status": "crashed", "multiplier": 0, "crash": 1.87, "payout": 0, "remaining": 141 }`.
+→ `{ "status": "won", "multiplier": 2.03, "crash": 3.41, "payout": 101 }`
+или `{ "status": "crashed", "multiplier": 0, "crash": 1.87, "payout": 0 }`.
 Повторный вывод возвращает тот же итог.
 
 ### `GET /api/rocket/{id}`

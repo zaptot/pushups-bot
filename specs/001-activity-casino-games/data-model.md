@@ -2,11 +2,6 @@
 
 ## Постоянные данные (Postgres)
 
-### `entries` (существует, без изменений схемы)
-
-Итог каждой игры — строка `kind = 'done'`, `source = 'manual'`, `author_id = user_id`, `amount` = выплата (может быть 0), `reason = '🎰 лудомания: <ставка> × <множитель> · <игра>'`.
-Этот формат уже понимают `ludomanBalance` (баланс) и `/undo` (запрет отмены).
-
 ### `casino_bets` (новая)
 
 | Поле | Тип | Правила |
@@ -15,13 +10,13 @@
 | `guild_id` | BIGINT NOT NULL | |
 | `user_id` | BIGINT NOT NULL | повтор с чужим `user_id` отклоняется |
 | `game` | TEXT NOT NULL | `roulette` / `plinko` / `blackjack` / `rocket` |
-| `stake` | INTEGER NOT NULL | 10–10 000 (блэкджек с удвоением — до 20 000) |
+| `stake` | INTEGER NOT NULL | 10–10 000 фантиков (удвоение в блэкджеке не выше 10 000) |
 | `multiplier` | NUMERIC(8,2) NOT NULL | итоговый множитель, 0 при проигрыше |
 | `payout` | INTEGER NOT NULL | ставка × множитель после случайного округления |
 | `result` | JSONB NOT NULL | ответ клиенту для повторного показа |
 | `created_at` | TIMESTAMPTZ NOT NULL DEFAULT now() | |
 
-Запись в `casino_bets` и в `entries` делается одной транзакцией; `INSERT ... ON CONFLICT (id) DO NOTHING` + чтение сохранённого результата при конфликте.
+Игры пишут только в `casino_bets`, учёт отжиманий (`entries`) не трогают. `INSERT ... ON CONFLICT (id) DO NOTHING` + чтение сохранённого результата при конфликте.
 
 ## Данные в памяти процесса
 

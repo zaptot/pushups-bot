@@ -112,6 +112,9 @@ func handleRocketStart(w http.ResponseWriter, r *http.Request, p player) {
 		writeError(w, http.StatusConflict, "Твоя ракета ещё летит")
 		return
 	}
+	if tooFast(w, p) {
+		return
+	}
 	round := &rocketRound{
 		ID: randomID(16), p: p, Stake: req.Stake, Auto: math.Floor(req.Auto*100) / 100,
 		crash: crashPoint(rand.Float64()), started: time.Now(), done: make(chan struct{}),

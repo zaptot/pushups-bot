@@ -44,10 +44,10 @@ description: "Tasks for Казино-игры в Discord Activity"
 **⚠️ CRITICAL**: Ни одна игра не начинается до завершения этой фазы
 
 - [X] T005 Добавить в `schema` в `db.go` таблицу `casino_bets` (поля и типы из data-model.md: `id TEXT PRIMARY KEY`, `guild_id`, `user_id`, `game`, `stake`, `multiplier NUMERIC(8,2)`, `payout`, `result JSONB`, `created_at`) через `CREATE TABLE IF NOT EXISTS`
-- [X] T006 Создать `casino.go`: константы `stakeMin = doneMin`, `stakeMax = 10000`; `validStake(n int) error`; `roundPayout(stake int, mult float64) int` со случайным округлением (research.md §5); тип `bet` (поля из data-model.md, `result any`); `settle(b bet) (json.RawMessage, error)` — одна транзакция через `db.Begin`: `INSERT INTO casino_bets ... ON CONFLICT (id) DO NOTHING`, при вставке — `INSERT INTO entries` (`kind='done'`, `source='manual'`, `author_id=user_id`, `reason = fmt.Sprintf("🎰 лудомания: %d × %.2f · %s", stake, mult, gameTitle)`), при конфликте — вернуть сохранённый `result`; `replay(id string, userID int64) (json.RawMessage, bool, error)` — сохранённый результат, если ставка этого игрока уже есть
+- [X] T006 Создать `casino.go`: константы `stakeMin = doneMin`, `stakeMax = 10000`; `validStake(n int) error`; `roundPayout(stake int, mult float64) int` со случайным округлением (research.md §5); тип `bet` (поля из data-model.md, `result any`); `settle(b bet) (json.RawMessage, error)` — `INSERT INTO casino_bets ... ON CONFLICT (id) DO NOTHING`, при конфликте — вернуть сохранённый `result` (учёт отжиманий `entries` не трогается: ставки в фантиках); `replay(id string, userID int64) (json.RawMessage, bool, error)` — сохранённый результат, если ставка этого игрока уже есть
 - [X] T007 Создать `activity.go`: `serveActivity()` на `http.ServeMux` с маршрутами вида `"POST /api/roulette"`; `writeJSON(w, status, v)` и `writeError(w, status, text)` с телом `{ "error": ... }`; сессии `map[string]session` под `sync.Mutex` (токен 32 байта из `crypto/rand`, hex, срок 24 ч); middleware `auth(func(w, r, s session))` по `Authorization: Bearer`, `401` при отсутствии/истечении; `GET /api/config` → `{clientId: session.State.User.ID, dev: cfg.ActivityDevUserID != 0}`; раздача `cfg.ActivityDir` через `http.FileServer` на `/`, если папка существует; лог старта объектом полей
 - [X] T008 В `activity.go` добавить `POST /api/session` для режима разработки: если `cfg.ActivityDevUserID != 0`, выдать сессию этому пользователю на сервере `cfg.GuildID`; иначе — путь Discord (T034), а до его реализации `401`
-- [X] T009 Добавить в `activity.go` функцию `remaining(guildID, userID int64) int` через существующий `userStats(...).remaining()` для поля `remaining` всех итоговых ответов
+- [X] T009 ~~Функция `remaining` для поля `remaining` в ответах~~ — отменено: ставки в фантиках, остаток отжиманий в ответах не нужен
 - [X] T010 В `main.go` после регистрации команд запускать `go serveActivity()`, если `cfg.ActivityPort != ""`, с `defer protect(...)` как у остальных фоновых задач
 - [X] T011 [P] Создать `activity/src/api.ts`: `inDiscord = new URLSearchParams(location.search).has('frame_id')`; `base = inDiscord ? '/.proxy/api' : '/api'`; токен в памяти; типизированная `request<T>(method, path, body?)` с `Authorization`, разбор `{error}` в `Error`; интерфейсы ответов из contracts/http-api.md (`RouletteResult`, `PlinkoResult`, `PlinkoTables`, `BlackjackState`, `RocketStart`, `RocketResult`, `Session`, `AppConfig`)
 - [X] T012 [P] Создать `activity/src/style.css`: тёмная тема в цветах колеса (`#232428` фон, `#facc15` жёлтый, `#dc2626` красный), меню из четырёх карточек, панель ставки, адаптив под узкий экран мобильного Discord
@@ -79,11 +79,11 @@ description: "Tasks for Казино-игры в Discord Activity"
 
 - [X] T015 [P] [US1] В `casino_test.go` добавить `TestCasinoRoulettePayouts`: для каждого типа ставки и каждого из 37 чисел множитель по таблице research.md §6; средний возврат каждого типа ровно 36/37
 - [X] T016 [P] [US1] В `casino_test.go` добавить `TestCasinoRoundPayout`: среднее `roundPayout(37, 0.5)` по 100 000 вызовам в пределах 18.5 ± 0.05, результат всегда 18 или 19; целые произведения не меняются
-- [X] T017 [P] [US1] В `casino_test.go` добавить `TestCasinoReplay` (через `setup(t)` из `bot_test.go`): 10 одинаковых `POST /api/roulette` с одним `id` → одна строка в `entries` и в `casino_bets`, все ответы одинаковые; чужой пользователь с тем же `id` получает ошибку
+- [X] T017 [P] [US1] В `casino_test.go` добавить `TestCasinoReplay` (через `setup(t)` из `bot_test.go`): 10 одинаковых `POST /api/roulette` с одним `id` → одна строка в `casino_bets`, в `entries` ничего, все ответы одинаковые; чужой пользователь с тем же `id` получает ошибку
 
 ### Implementation for User Story 1
 
-- [X] T018 [US1] Создать `roulette.go`: множество красных чисел; `rouletteMultiplier(kind string, value, number int) (float64, error)` с проверкой `kind`/`value`; обработчик `POST /api/roulette` — `replay` → `validStake` → `rand.IntN(37)` → `roundPayout` → `settle` с `result` `{number, multiplier, payout, remaining}`; регистрация маршрута в `activity.go`
+- [X] T018 [US1] Создать `roulette.go`: множество красных чисел; `rouletteMultiplier(kind string, value, number int) (float64, error)` с проверкой `kind`/`value`; обработчик `POST /api/roulette` — `replay` → `validStake` → `rand.IntN(37)` → `roundPayout` → `settle` с `result` `{number, multiplier, payout}`; регистрация маршрута в `activity.go`
 - [X] T019 [US1] Создать `activity/src/roulette.ts`: выбор ставки (поле 10–10 000) и типа (кнопки цветов, чёт/нечет, половины, дюжины, сетка 0–36); `crypto.randomUUID()` на каждую ставку; запрос; canvas-колесо в европейском порядке чисел с замедлением до числа из ответа (~4 с), затем показ выплаты и остатка; блокировка кнопки во время спина
 - [X] T020 [US1] Подключить экран рулетки в меню `activity/src/main.ts`
 
@@ -103,7 +103,7 @@ description: "Tasks for Казино-игры в Discord Activity"
 
 ### Implementation for User Story 2
 
-- [X] T022 [US2] Создать `plinko.go`: вычисление таблиц при инициализации пакета по формуле research.md §7 (`g` = 1.45 / 1.9 / 2.6, округление до сотых к ближайшему); `drop(rows) (path []int, slot int)`; обработчики `GET /api/plinko/tables` и `POST /api/plinko` (проверка `rows` 8–16 и `risk`, `replay`, `settle` с `{path, slot, multiplier, payout, remaining}`); регистрация маршрутов в `activity.go`
+- [X] T022 [US2] Создать `plinko.go`: вычисление таблиц при инициализации пакета по формуле research.md §7 (`g` = 1.45 / 1.9 / 2.6, округление до сотых к ближайшему); `drop(rows) (path []int, slot int)`; обработчики `GET /api/plinko/tables` и `POST /api/plinko` (проверка `rows` 8–16 и `risk`, `replay`, `settle` с `{path, slot, multiplier, payout}`); регистрация маршрутов в `activity.go`
 - [X] T023 [US2] Создать `activity/src/plinko.ts`: выбор рядов (8–16) и риска, загрузка таблиц один раз; canvas-пирамида штырьков и подписи лунок; анимация шарика по `path` — параболы между штырьками, ~0,15 с на ряд, подсветка лунки; затем выплата и остаток
 - [X] T024 [US2] Подключить экран Plinko в меню `activity/src/main.ts`
 

@@ -24,6 +24,7 @@ func casinoCall(t *testing.T, mux http.Handler, method, path, token string, body
 		}
 	}
 	req := httptest.NewRequest(method, path, &buf)
+	req.RemoteAddr = "127.0.0.1:50000"
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -37,6 +38,8 @@ func casinoCall(t *testing.T, mux http.Handler, method, path, token string, body
 	}
 	return rec.Code, out
 }
+
+func init() { betInterval = 0 }
 
 func devToken(t *testing.T, mux http.Handler) string {
 	t.Helper()
@@ -419,5 +422,63 @@ func TestCasinoReplay(t *testing.T) {
 	}
 	if code, _ := casinoCall(t, mux, "POST", "/api/roulette", token, map[string]any{"id": "replay-2", "stake": 5, "bet": map[string]any{"kind": "red"}}); code != http.StatusUnprocessableEntity {
 		t.Fatalf("ставка 5: ждали 422, получили %d", code)
+	}
+}
+
+func TestCasinoDevSessionLocalOnly(t *testing.T) {
+	cfg.GuildID, cfg.ActivityDir = testGuild, ""
+	cfg.ActivityDevUserID = 42
+	t.Cleanup(func() { cfg.ActivityDevUserID = 0 })
+	mux := activityMux()
+	for _, c := range []struct {
+		remote, forwarded string
+		want              int
+	}{
+		{"127.0.0.1:50000", "", http.StatusOK},
+		{"[::1]:50000", "", http.StatusOK},
+		{"192.0.2.1:50000", "", http.StatusForbidden},
+		{"127.0.0.1:50000", "203.0.113.5", http.StatusForbidden},
+	} {
+		req := httptest.NewRequest("POST", "/api/session", nil)
+		req.RemoteAddr = c.remote
+		if c.forwarded != "" {
+			req.Header.Set("X-Forwarded-For", c.forwarded)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != c.want {
+			t.Errorf("%s %s: ждали %d, получили %d", c.remote, c.forwarded, c.want, rec.Code)
+		}
+	}
+}
+
+func TestCasinoRateLimit(t *testing.T) {
+	betInterval = time.Hour
+	t.Cleanup(func() { betInterval = 0 })
+	p := player{UserID: 5, GuildID: 1}
+	if rec := httptest.NewRecorder(); tooFast(rec, p) {
+		t.Fatal("первая ставка отклонена")
+	}
+	rec := httptest.NewRecorder()
+	if !tooFast(rec, p) || rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("вторая ставка сразу: ждали 429, получили %d", rec.Code)
+	}
+	if rec := httptest.NewRecorder(); tooFast(rec, player{UserID: 6, GuildID: 1}) {
+		t.Fatal("ставка другого игрока отклонена")
+	}
+}
+
+func TestCasinoDoubleCap(t *testing.T) {
+	deck := []card{{9, 0}, {10, 0}, {2, 0}, {7, 0}, {5, 0}}
+	h := newBlackjackHand("cap", player{UserID: 1}, stakeMax, deck)
+	if h.Status != "playing" || h.canDouble() {
+		t.Fatalf("удвоение на максимальной ставке должно быть запрещено: %s %v", h.Status, h.canDouble())
+	}
+	if err := h.act("double"); err != errBadAction {
+		t.Fatalf("ждали errBadAction, получили %v", err)
+	}
+	h = newBlackjackHand("ok", player{UserID: 1}, stakeMax/2, deck)
+	if !h.canDouble() {
+		t.Fatal("удвоение до максимума должно быть разрешено")
 	}
 }

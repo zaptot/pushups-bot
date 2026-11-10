@@ -78,6 +78,9 @@ func handleRoulette(w http.ResponseWriter, r *http.Request, p player) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	if tooFast(w, p) {
+		return
+	}
 	payout := roundPayout(req.Stake, mult)
 	log.Printf("Рулетка %d: %d на %s %d, выпало %d, выигрыш %d", p.UserID, req.Stake, req.Bet.Kind, req.Bet.Value, n, payout)
 	raw, err := settle(bet{

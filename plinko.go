@@ -93,6 +93,9 @@ func handlePlinko(w http.ResponseWriter, r *http.Request, p player) {
 		writeError(w, http.StatusUnprocessableEntity, "Неверные ряды или риск")
 		return
 	}
+	if tooFast(w, p) {
+		return
+	}
 	path, slot := plinkoDrop(req.Rows)
 	mult := table[slot]
 	payout := roundPayout(req.Stake, mult)

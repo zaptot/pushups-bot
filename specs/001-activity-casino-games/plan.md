@@ -6,7 +6,7 @@
 
 ## Summary
 
-Четыре игры (рулетка с зеро, Plinko, блэкджек, рокетка) как Discord Activity. Веб-страница на TypeScript + canvas, игровой HTTP API внутри существующего Go-процесса бота. Результат определяет только сервер и пишет одной транзакцией в новую таблицу `casino_bets` и в существующую `entries` в формате лудомании, поэтому баланс, статистика и запрет `/undo` работают без изменений. Режим разработки позволяет играть в обычном браузере без настройки Discord и хостинга. Подробности решений — [research.md](research.md).
+Четыре игры (рулетка с зеро, Plinko, блэкджек, рокетка) как Discord Activity. Веб-страница на TypeScript + canvas, игровой HTTP API внутри существующего Go-процесса бота. Результат определяет только сервер и пишет в новую таблицу `casino_bets`. Ставки — в фантиках, игровой валюте без баланса: учёт отжиманий и статистика бота не меняются. Режим разработки позволяет играть в обычном браузере без настройки Discord и хостинга. Подробности решений — [research.md](research.md).
 
 ## Technical Context
 
@@ -14,7 +14,7 @@
 
 **Primary Dependencies**: Сервер — только стандартная библиотека + уже подключённые `discordgo`, `pgx`. Фронтенд — `@discord/embedded-app-sdk`, `vite`, `typescript`.
 
-**Storage**: Postgres (Supabase): новая таблица `casino_bets`, существующая `entries`. Активные партии блэкджека, раунды рокетки и сессии — в памяти.
+**Storage**: Postgres (Supabase): новая таблица `casino_bets`. Активные партии блэкджека, раунды рокетки и сессии — в памяти.
 
 **Testing**: `go test` — математика без базы + один интеграционный тест в откатываемой транзакции (как `bot_test.go`).
 
@@ -61,7 +61,7 @@ specs/001-activity-casino-games/
 ```text
 pushups-bot/
 ├── activity.go          # новый: HTTP-сервер, маршруты, сессии, вход Discord/dev, раздача статики
-├── casino.go            # новый: проверка ставки, случайное округление, settle() — транзакция casino_bets + entries
+├── casino.go            # новый: проверка ставки, случайное округление, settle() — запись в casino_bets
 ├── roulette.go          # новый: спин и обработчик
 ├── plinko.go            # новый: таблицы по формуле, путь шарика, обработчики
 ├── blackjack.go         # новый: колода, подсчёт, дилер, партии в памяти, таймер, обработчики
@@ -157,7 +157,6 @@ classDiagram
     }
     class postgres {
         casino_bets
-        entries
     }
 
     activityServer --> session : выдаёт и проверяет
@@ -186,9 +185,9 @@ sequenceDiagram
         DB-->>S: сохранённый result
     else новая
         S->>S: спин, случайное округление
-        S->>DB: BEGIN; INSERT casino_bets; INSERT entries; COMMIT
+        S->>DB: INSERT casino_bets ON CONFLICT DO NOTHING
     end
-    S-->>C: {number, payout, remaining}
+    S-->>C: {number, multiplier, payout}
     C->>C: анимация до числа из ответа
 ```
 

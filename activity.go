@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,6 +29,10 @@ type player struct {
 var (
 	playersMu sync.Mutex
 	players   = map[string]player{}
+
+	betInterval = time.Second
+	lastBetMu   sync.Mutex
+	lastBet     = map[[2]int64]time.Time{}
 )
 
 type playerHandler func(http.ResponseWriter, *http.Request, player)
@@ -119,6 +124,32 @@ func auth(h playerHandler) http.HandlerFunc {
 	}
 }
 
+func tooFast(w http.ResponseWriter, p player) bool {
+	now := time.Now()
+	lastBetMu.Lock()
+	defer lastBetMu.Unlock()
+	if now.Sub(lastBet[playerKey(p)]) < betInterval {
+		writeError(w, http.StatusTooManyRequests, "Слишком часто, подожди секунду")
+		return true
+	}
+	for k, t := range lastBet {
+		if now.Sub(t) > time.Minute {
+			delete(lastBet, k)
+		}
+	}
+	lastBet[playerKey(p)] = now
+	return false
+}
+
+func isLocal(r *http.Request) bool {
+	if r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("Forwarded") != "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	ip := net.ParseIP(host)
+	return err == nil && ip != nil && ip.IsLoopback()
+}
+
 func activityClientID() string {
 	if cfg.ClientID == "" && session != nil && session.State.User != nil {
 		return session.State.User.ID
@@ -140,6 +171,10 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 	if req.Code == "" {
 		if cfg.ActivityDevUserID == 0 {
 			writeError(w, http.StatusUnauthorized, "Открой казино из Discord")
+			return
+		}
+		if !isLocal(r) {
+			writeError(w, http.StatusForbidden, "Режим разработки работает только с этого компьютера")
 			return
 		}
 		p = player{UserID: cfg.ActivityDevUserID, GuildID: parseID(cfg.GuildID), Name: "Тестовый игрок"}
