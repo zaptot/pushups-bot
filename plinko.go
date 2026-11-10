@@ -96,7 +96,7 @@ func handlePlinko(w http.ResponseWriter, r *http.Request, p player) {
 	path, slot := plinkoDrop(req.Rows)
 	mult := table[slot]
 	payout := roundPayout(req.Stake, mult)
-	log.Printf("Plinko %d: %d, %d рядов, %s, лунка %d (x%.2f), засчитано %d", p.UserID, req.Stake, req.Rows, req.Risk, slot, mult, payout)
+	log.Printf("Plinko %d: %d, %d рядов, %s, лунка %d (x%.2f), выигрыш %d", p.UserID, req.Stake, req.Rows, req.Risk, slot, mult, payout)
 	raw, err := settle(bet{
 		ID: req.ID, GuildID: p.GuildID, UserID: p.UserID, Game: "plinko",
 		Stake: req.Stake, Multiplier: mult, Payout: payout,

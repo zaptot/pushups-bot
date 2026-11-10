@@ -14,15 +14,7 @@ const (
 	betIDMax = 64
 )
 
-var (
-	gameTitles = map[string]string{
-		"roulette":  "рулетка",
-		"plinko":    "plinko",
-		"blackjack": "блэкджек",
-		"rocket":    "рокетка",
-	}
-	errBetOwner = errors.New("ставка с таким id принадлежит другому игроку")
-)
+var errBetOwner = errors.New("ставка с таким id принадлежит другому игроку")
 
 type bet struct {
 	ID              string
@@ -36,7 +28,7 @@ type bet struct {
 
 func validStake(n int) error {
 	if n < stakeMin || n > stakeMax {
-		return fmt.Errorf("Ставка — от %d до %d отжиманий", stakeMin, stakeMax)
+		return fmt.Errorf("Ставка — от %d до %d фантиков", stakeMin, stakeMax)
 	}
 	return nil
 }
@@ -70,28 +62,15 @@ func settle(b bet) (json.RawMessage, error) {
 	}
 	ctx, cancel := dbCtx()
 	defer cancel()
-	tx, err := db.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result)
+	tag, err := db.Exec(ctx, `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
 		b.ID, b.GuildID, b.UserID, b.Game, b.Stake, b.Multiplier, b.Payout, result)
 	if err != nil {
 		return nil, err
 	}
 	if tag.RowsAffected() == 0 {
-		if err := tx.Rollback(ctx); err != nil {
-			return nil, err
-		}
 		stored, _, err := replay(b.ID, b.UserID)
 		return stored, err
 	}
-	reason := fmt.Sprintf("🎰 лудомания: %d × %.2f · %s", b.Stake, b.Multiplier, gameTitles[b.Game])
-	if _, err := tx.Exec(ctx, `INSERT INTO entries (guild_id, user_id, kind, amount, author_id, reason, source)
-		VALUES ($1, $2, 'done', $3, $2, $4, 'manual')`, b.GuildID, b.UserID, b.Payout, reason); err != nil {
-		return nil, err
-	}
-	return result, tx.Commit(ctx)
+	return result, nil
 }

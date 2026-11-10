@@ -407,8 +407,8 @@ func TestCasinoReplay(t *testing.T) {
 			t.Fatalf("повтор дал другой результат: %v против %v", out, first)
 		}
 	}
-	if n := count(t, "SELECT count(*) FROM entries WHERE guild_id = 1 AND user_id = 501 AND reason LIKE '🎰 лудомания:%'"); n != 1 {
-		t.Fatalf("записей в entries %d, ждали 1", n)
+	if n := count(t, "SELECT count(*) FROM entries WHERE guild_id = 1 AND user_id = 501"); n != 0 {
+		t.Fatalf("казино записало отжимания: %d записей в entries", n)
 	}
 	if n := count(t, "SELECT count(*) FROM casino_bets WHERE id = 'replay-1'"); n != 1 {
 		t.Fatalf("записей в casino_bets %d, ждали 1", n)
@@ -419,12 +419,5 @@ func TestCasinoReplay(t *testing.T) {
 	}
 	if code, _ := casinoCall(t, mux, "POST", "/api/roulette", token, map[string]any{"id": "replay-2", "stake": 5, "bet": map[string]any{"kind": "red"}}); code != http.StatusUnprocessableEntity {
 		t.Fatalf("ставка 5: ждали 422, получили %d", code)
-	}
-	balance, err := ludomanBalance(testGuildID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := int(first["payout"].(float64)) - 20; balance[501] != want {
-		t.Fatalf("баланс лудомании %d, ждали %d", balance[501], want)
 	}
 }

@@ -95,7 +95,7 @@ function drawBoard(ctx: CanvasRenderingContext2D, g: Geometry, table: number[], 
 
 function verdict(res: PlinkoResult): string {
   const mood = res.multiplier >= 1 ? '🤑' : '💀';
-  return `${mood} x${res.multiplier}: засчитано ${res.payout}. Осталось: ${res.remaining}`;
+  return `${mood} x${res.multiplier}: выигрыш ${res.payout} фантиков`;
 }
 
 export function mountPlinko(root: HTMLElement): Cleanup {

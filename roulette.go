@@ -79,7 +79,7 @@ func handleRoulette(w http.ResponseWriter, r *http.Request, p player) {
 		return
 	}
 	payout := roundPayout(req.Stake, mult)
-	log.Printf("Рулетка %d: %d на %s %d, выпало %d, засчитано %d", p.UserID, req.Stake, req.Bet.Kind, req.Bet.Value, n, payout)
+	log.Printf("Рулетка %d: %d на %s %d, выпало %d, выигрыш %d", p.UserID, req.Stake, req.Bet.Kind, req.Bet.Value, n, payout)
 	raw, err := settle(bet{
 		ID: req.ID, GuildID: p.GuildID, UserID: p.UserID, Game: "roulette",
 		Stake: req.Stake, Multiplier: mult, Payout: payout,

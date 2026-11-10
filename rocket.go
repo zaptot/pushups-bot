@@ -75,7 +75,7 @@ func (r *rocketRound) finish(m float64) {
 	r.timer.Stop()
 	status, mult := rocketOutcome(r.crash, r.Auto, m)
 	payout := roundPayout(r.Stake, mult)
-	log.Printf("Рокетка %d: ставка %d, взрыв x%.2f, %s x%.2f, засчитано %d", r.p.UserID, r.Stake, r.crash, status, mult, payout)
+	log.Printf("Рокетка %d: ставка %d, взрыв x%.2f, %s x%.2f, выигрыш %d", r.p.UserID, r.Stake, r.crash, status, mult, payout)
 	r.result, r.err = settle(bet{
 		ID: r.ID, GuildID: r.p.GuildID, UserID: r.p.UserID, Game: "rocket",
 		Stake: r.Stake, Multiplier: mult, Payout: payout,

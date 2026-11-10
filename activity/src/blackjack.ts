@@ -82,7 +82,7 @@ export function mountBlackjack(root: HTMLElement): Cleanup {
     if (next.status === 'playing') {
       status.textContent = `Ставка ${next.stake}. Ещё или хватит?`;
     } else {
-      status.textContent = `${outcomes[next.status]} — ставка ${next.stake}, засчитано ${next.payout}. Осталось: ${next.remaining}`;
+      status.textContent = `${outcomes[next.status]} — ставка ${next.stake}, выигрыш ${next.payout} фантиков`;
       console.log({ blackjack: next });
     }
     setButtons(false);

@@ -208,11 +208,6 @@ func discordPlayer(code, guild string) (player, int, error) {
 	return player{UserID: parseID(user.ID), GuildID: guildID, Name: orEmpty(displayName(m, m.User), user.ID)}, 0, nil
 }
 
-func remaining(p player) (int, error) {
-	st, err := userStats(p.GuildID, p.UserID)
-	return st.remaining(), err
-}
-
 func replayed(w http.ResponseWriter, id string, p player) bool {
 	if id == "" || len(id) > betIDMax {
 		writeError(w, http.StatusUnprocessableEntity, "Неверный id ставки")
@@ -231,17 +226,10 @@ func replayed(w http.ResponseWriter, id string, p player) bool {
 }
 
 func respondBet(w http.ResponseWriter, raw json.RawMessage, err error, p player) {
-	out := map[string]any{}
-	if err == nil {
-		err = json.Unmarshal(raw, &out)
-	}
-	if err == nil {
-		out["remaining"], err = remaining(p)
-	}
 	if err != nil {
 		log.Printf("Казино: ошибка ставки %d: %v", p.UserID, err)
 		writeError(w, http.StatusInternalServerError, "Что-то пошло не так, попробуй ещё раз")
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, raw)
 }

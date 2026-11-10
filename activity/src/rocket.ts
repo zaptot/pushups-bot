@@ -69,10 +69,9 @@ function draw(ctx: CanvasRenderingContext2D, growth: number, seconds: number, ph
 }
 
 function verdict(res: RocketResult): string {
-  const tail = `Осталось: ${res.remaining}`;
   return res.status === 'won'
-    ? `🤑 Забрал на x${res.multiplier.toFixed(2)}, засчитано ${res.payout}. Ракета взорвалась бы на x${res.crash.toFixed(2)}. ${tail}`
-    : `💥 Взрыв на x${res.crash.toFixed(2)}, засчитано 0. ${tail}`;
+    ? `🤑 Забрал на x${res.multiplier.toFixed(2)}: выигрыш ${res.payout} фантиков. Ракета взорвалась бы на x${res.crash.toFixed(2)}`
+    : `💥 Взрыв на x${res.crash.toFixed(2)}`;
 }
 
 export function mountRocket(root: HTMLElement): Cleanup {

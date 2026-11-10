@@ -109,10 +109,7 @@ function drawWheel(ctx: CanvasRenderingContext2D, angle: number, shown: number |
 
 function verdict(res: RouletteResult): string {
   const head = `Выпало ${res.number}.`;
-  const tail = `Осталось: ${res.remaining}`;
-  return res.payout > 0
-    ? `${head} 🤑 Засчитано ${res.payout} (x${res.multiplier}). ${tail}`
-    : `${head} 💀 Мимо, засчитано 0. ${tail}`;
+  return res.payout > 0 ? `${head} 🤑 Выигрыш ${res.payout} фантиков (x${res.multiplier})` : `${head} 💀 Мимо`;
 }
 
 export function mountRoulette(root: HTMLElement): Cleanup {

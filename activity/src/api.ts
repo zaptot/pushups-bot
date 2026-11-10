@@ -16,7 +16,6 @@ export interface Session {
 export interface Settled {
   multiplier: number;
   payout: number;
-  remaining: number;
 }
 
 export type RouletteBetKind = 'red' | 'black' | 'even' | 'odd' | 'low' | 'high' | 'dozen' | 'number';
