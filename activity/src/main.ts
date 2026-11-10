@@ -80,7 +80,7 @@ function renderNotCitizen(root: HTMLElement, user: Session['user']): void {
   header.append(el('span', 'title', '🎰 Казино отжиманий'), el('span', 'user', user.name));
   const body = el('main', 'body not-citizen');
   const img = el('img', 'not-citizen-img');
-  img.src = 'not-citizen.jpg';
+  img.src = 'not-citizen.png';
   img.alt = 'Сори, пупсик, но ты даже не гражданин';
   body.append(img, el('p', 'status', 'Играть могут только граждане'));
   root.replaceChildren(header, body);
