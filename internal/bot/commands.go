@@ -96,7 +96,7 @@ func commandList() []command {
 		cmd("accuse", "Обвинить участника (решают граждане)", accuseHandler, userOpt("user", "Кого обвиняешь", true),
 			intOpt("pushups", "Наказание в отжиманиях", true, 1, 1000), strOpt("reason", "В чём обвинение", true), hoursOpt()),
 		cmd("revoke", "Голосование за лишение гражданства (нужно ⅔ граждан)", revokeHandler, userOpt("user", "Кого лишить гражданства", true), hoursOpt()),
-		cmd("marginal", "Голосование: признать гражданина маргиналом (без наград)", marginalHandler, userOpt("user", "Кого признать маргиналом", true), hoursOpt()),
+		cmd("marginal", "Голосование: признать гражданина маргиналом", marginalHandler, userOpt("user", "Кого признать маргиналом", true), hoursOpt()),
 		cmd("propose", "Предложить закон (референдум на 1 день)", proposeHandler, lawText),
 		cmd("election", "Начать выборы президента", electionHandler),
 		cmd("nominate", "Выдвинуть себя в президенты (во время выборов)", nominateHandler),

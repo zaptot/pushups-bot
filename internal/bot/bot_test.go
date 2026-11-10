@@ -205,10 +205,6 @@ func TestPureLogic(t *testing.T) {
 			t.Errorf("pubg %v: %d %d", c, p, u)
 		}
 	}
-	jan := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	if got := addMonths(jan, -3); got.Month() != time.October || got.Year() != 2025 {
-		t.Error(got)
-	}
 	ids, v := leaders([]ranked{{1, 30}, {2, 10}, {3, 30}}, true)
 	if len(ids) != 2 || v != 30 {
 		t.Error(ids, v)
@@ -530,19 +526,12 @@ func TestPubgProcessing(t *testing.T) {
 	want(t, fake, "account.a1")
 }
 
-func TestAwards(t *testing.T) {
-	fake := setup(t)
-	session.State.GuildAdd(&discordgo.Guild{ID: testGuild})
-	session.State.ChannelAdd(&discordgo.Channel{ID: "777", GuildID: testGuild})
-	cfg.CivicChannelID = "777"
-	now := time.Now().In(cfg.Location)
-	monthEnd := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, cfg.Location)
-	played := monthEnd.AddDate(0, 0, -5)
-	mustExec(t, "INSERT INTO dota_links (guild_id, user_id, account_id, linked_by, linked_at) VALUES (1, 1, 1, 0, $1)", played.AddDate(0, -3, 0))
+func TestRankRoles(t *testing.T) {
+	setup(t)
+	played := time.Now().AddDate(0, 0, -5)
 	for _, id := range []int64{1, 2, 3} {
 		mustExec(t, "INSERT INTO citizens (guild_id, user_id) VALUES (1, $1)", id)
 	}
-	mustExec(t, "INSERT INTO marginals (guild_id, user_id) VALUES (1, 3)")
 	game := func(user int64, matchID, pushups int) {
 		mustExec(t, `INSERT INTO dota_matches (guild_id, user_id, match_id, kills, deaths, assists, pushups, played_at)
 			VALUES (1, $1, $2, 0, 0, 0, $3, $4)`, user, matchID, pushups, played)
@@ -550,31 +539,18 @@ func TestAwards(t *testing.T) {
 	for i := range 11 {
 		game(1, 1000+i, 30)
 		game(2, 2000+i, 10)
-		game(3, 3000+i, 70)
 	}
-	if err := maybeRunAwards(testGuildID); err != nil {
-		t.Fatal(err)
-	}
-	text := fake.text()
-	if !strings.Contains(text, "назначено, 330") || !strings.Contains(text, "назначено, 110") || strings.Contains(text, "назначено, 770") {
-		t.Fatal(text)
-	}
-	if !strings.Contains(text, "снова участвуют") || !strings.Contains(text, "@3") {
-		t.Fatal(text)
-	}
-	fake.reset()
-	if n := count(t, "SELECT count(*)::int FROM marginals WHERE guild_id = 1"); n != 0 {
-		t.Fatal(n)
-	}
-	if err := maybeRunAwards(testGuildID); err != nil {
-		t.Fatal(err)
-	}
-	if fake.text() != "" {
-		t.Fatal("награды выданы дважды", fake.text())
-	}
+	game(3, 3000, 70) // мало игр — в рейтинг не попадает
 	scores, games, err := periodScores(testGuildID, played.Add(-time.Hour), played.Add(time.Hour))
-	if err != nil || scores[1] != 330 || games[2] != 11 {
+	if err != nil || scores[1] != 330 || games[2] != 11 || games[3] != 1 {
 		t.Fatal(scores, games, err)
+	}
+	ranking, err := eligibleRanking(testGuildID, played.Add(-time.Hour), played.Add(time.Hour))
+	if err != nil || len(ranking) != 2 {
+		t.Fatal(ranking, err)
+	}
+	if top, v := leaders(ranking, true); len(top) != 1 || top[0] != 1 || v != 330 {
+		t.Fatal(top, v)
 	}
 }
 

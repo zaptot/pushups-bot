@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS dota_matches (          -- уже обработан�
 
 -- соло-игры в Dota: NULL — выключены, иначе момент включения
 ALTER TABLE dota_links ADD COLUMN IF NOT EXISTS solo_since TIMESTAMPTZ;
--- false — матч засчитан как соло (для отчётов; в наградах учитывается как обычный)
+-- false — матч засчитан как соло (для отчётов; в ролях учитывается как обычный)
 ALTER TABLE dota_matches ADD COLUMN IF NOT EXISTS is_party BOOLEAN NOT NULL DEFAULT true;
 
 CREATE TABLE IF NOT EXISTS pubg_links (
@@ -161,12 +161,7 @@ CREATE TABLE IF NOT EXISTS role_holders (          -- кому бот выдал
     PRIMARY KEY (guild_id, role_key, user_id)
 );
 
-CREATE TABLE IF NOT EXISTS award_runs (
-    guild_id BIGINT      NOT NULL,
-    period   TEXT        NOT NULL,                -- месяц итогов, например 2026-11
-    run_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (guild_id, period)
-);
+DROP TABLE IF EXISTS award_runs;                -- ежемесячные награды убраны
 
 CREATE TABLE IF NOT EXISTS casino_bets (
     id         TEXT          PRIMARY KEY,
