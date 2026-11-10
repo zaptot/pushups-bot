@@ -17,10 +17,51 @@ export function points(n: number): string {
   return `${n} ${word}`;
 }
 
-const render = (): void => {
+const countMs = 700;
+const flashMs = 900;
+const format = new Intl.NumberFormat('ru-RU');
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+let shown: number | null = null;
+let frame = 0;
+let flashTimer = 0;
+
+const paint = (n: number | null): void => {
   if (node) {
-    node.textContent = value === null ? '💰 …' : `💰 ${value}`;
+    node.textContent = n === null ? '…' : format.format(n);
   }
+};
+
+const flash = (kind: 'up' | 'down'): void => {
+  if (!node) {
+    return;
+  }
+  node.classList.remove('up', 'down');
+  node.classList.add(kind);
+  clearTimeout(flashTimer);
+  flashTimer = window.setTimeout(() => node?.classList.remove(kind), flashMs);
+};
+
+/** Показывает value: при изменении число досчитывает до нового и подсвечивается. */
+const render = (): void => {
+  cancelAnimationFrame(frame);
+  const from = shown;
+  const to = value;
+  shown = to;
+  if (from === null || to === null || from === to || reducedMotion.matches) {
+    paint(to);
+    return;
+  }
+  flash(to > from ? 'up' : 'down');
+  const t0 = performance.now();
+  const step = (now: number): void => {
+    const t = Math.min(1, (now - t0) / countMs);
+    paint(Math.round(from + (to - from) * (1 - (1 - t) ** 3)));
+    if (t < 1) {
+      frame = requestAnimationFrame(step);
+    }
+  };
+  frame = requestAnimationFrame(step);
 };
 
 /** Где показывать баланс (в шапке). */
