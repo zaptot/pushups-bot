@@ -341,3 +341,16 @@ button:disabled {
 .gone {
   display: none;
 }
+
+.not-citizen {
+  align-items: center;
+  text-align: center;
+}
+
+.not-citizen-img {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  margin: 0 auto;
+  border-radius: 12px;
+}

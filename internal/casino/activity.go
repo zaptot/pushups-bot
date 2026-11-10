@@ -18,6 +18,7 @@ import (
 
 	"pushups-bot/internal/config"
 	"pushups-bot/internal/shared"
+	"pushups-bot/internal/store"
 )
 
 const (
@@ -41,6 +42,14 @@ var (
 )
 
 type playerHandler func(http.ResponseWriter, *http.Request, player)
+
+const notCitizen = "Играть могут только граждане"
+
+// isCitizen проверяет гражданство по базе бота; в тестах без базы подменяется.
+var isCitizen = func(p player) (bool, error) {
+	var one int
+	return store.FetchOne("SELECT 1 FROM citizens WHERE guild_id = $1 AND user_id = $2", []any{p.GuildID, p.UserID}, &one)
+}
 
 func activityMux() *http.ServeMux {
 	mux := http.NewServeMux()
@@ -143,6 +152,15 @@ func auth(h playerHandler) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "Сессия устарела, открой казино заново")
 			return
 		}
+		// гражданство проверяется на каждый запрос: его могут отнять, пока казино открыто
+		if citizen, err := isCitizen(p); err != nil {
+			log.Printf("Казино: не удалось проверить гражданство: %v", err)
+			writeError(w, http.StatusInternalServerError, "Ошибка базы, попробуй ещё раз")
+			return
+		} else if !citizen {
+			writeError(w, http.StatusForbidden, notCitizen)
+			return
+		}
 		h(w, r, p)
 	}
 }
@@ -214,10 +232,19 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"token": newPlayer(p),
-		"user":  map[string]string{"id": shared.IDStr(p.UserID), "name": p.Name},
-	})
+	user := map[string]string{"id": shared.IDStr(p.UserID), "name": p.Name}
+	citizen, err := isCitizen(p)
+	if err != nil {
+		log.Printf("Казино: не удалось проверить гражданство: %v", err)
+		writeError(w, http.StatusInternalServerError, "Ошибка базы, попробуй ещё раз")
+		return
+	}
+	if !citizen {
+		// не гражданину токен не выдаём: страница покажет заглушку
+		writeJSON(w, http.StatusOK, map[string]any{"citizen": false, "user": user})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"citizen": true, "token": newPlayer(p), "user": user})
 }
 
 func discordPlayer(code, guild string) (player, int, error) {

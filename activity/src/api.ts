@@ -9,7 +9,8 @@ export interface AppConfig {
 }
 
 export interface Session {
-  token: string;
+  citizen: boolean;
+  token?: string;
   user: { id: string; name: string };
 }
 

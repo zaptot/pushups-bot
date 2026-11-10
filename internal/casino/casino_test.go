@@ -56,7 +56,13 @@ func casinoCall(t *testing.T, mux http.Handler, method, path, token string, body
 	return rec.Code, out
 }
 
-func init() { betInterval = 0 }
+var citizenInDB = isCitizen
+
+func init() {
+	betInterval = 0
+	// тесты без базы считают всех гражданами; проверку по базе — см. TestCasinoCitizensOnly
+	isCitizen = func(player) (bool, error) { return true, nil }
+}
 
 func devToken(t *testing.T, mux http.Handler) string {
 	t.Helper()
@@ -404,6 +410,35 @@ func TestCasinoRocket(t *testing.T) {
 	}
 	if m := rocketMultiplier(rocketDelay(2) + time.Millisecond); m != 2 {
 		t.Fatalf("множитель в момент x2: %.2f", m)
+	}
+}
+
+func TestCasinoCitizensOnly(t *testing.T) {
+	storetest.Begin(t)
+	isCitizen = citizenInDB
+	t.Cleanup(func() { isCitizen = func(player) (bool, error) { return true, nil } })
+	cfg.GuildID, cfg.ActivityDir = testGuild, ""
+	cfg.ActivityDevUserID = 601
+	t.Cleanup(func() { cfg.ActivityDevUserID = 0 })
+	mux := activityMux()
+	code, out := casinoCall(t, mux, "POST", "/api/session", "", nil)
+	if code != http.StatusOK || out["citizen"] != false || out["token"] != nil {
+		t.Fatalf("не гражданин: %d %v", code, out)
+	}
+	stale := newPlayer(player{UserID: 601, GuildID: testGuildID})
+	body := map[string]any{"id": "nc-1", "stake": 20, "bet": map[string]any{"kind": "red"}}
+	if code, _ := casinoCall(t, mux, "POST", "/api/roulette", stale, body); code != http.StatusForbidden {
+		t.Fatalf("ставка не гражданина: ждали 403, получили %d", code)
+	}
+	if err := store.Exec("INSERT INTO citizens (guild_id, user_id) VALUES (1, 601)"); err != nil {
+		t.Fatal(err)
+	}
+	code, out = casinoCall(t, mux, "POST", "/api/session", "", nil)
+	if code != http.StatusOK || out["citizen"] != true || out["token"] == nil {
+		t.Fatalf("гражданин: %d %v", code, out)
+	}
+	if code, out := casinoCall(t, mux, "POST", "/api/roulette", out["token"].(string), body); code != http.StatusOK {
+		t.Fatalf("ставка гражданина: %d %v", code, out)
 	}
 }
 
