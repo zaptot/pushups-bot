@@ -10,18 +10,26 @@ import { mountShop } from './shop';
 import { refreshBalance, showBalanceIn } from './wallet';
 
 interface Game {
+  id: string;
   title: string;
+  blurb: string;
   icon: string;
   mount: Screen;
 }
 
 const games: Game[] = [
-  { title: 'Рулетка', icon: '🎡', mount: mountRoulette },
-  { title: 'Plinko', icon: '🔻', mount: mountPlinko },
-  { title: 'Блэкджек', icon: '🃏', mount: mountBlackjack },
-  { title: 'Рокетка', icon: '🚀', mount: mountRocket },
-  { title: 'Магазин', icon: '🛒', mount: mountShop },
+  { id: 'roulette', title: 'Рулетка', blurb: 'Цвет, чёт или число — до x36', icon: '🎡', mount: mountRoulette },
+  { id: 'plinko', title: 'Plinko', blurb: 'Шарик сам решит, сколько дать', icon: '🔻', mount: mountPlinko },
+  { id: 'blackjack', title: 'Блэкджек', blurb: 'Набери 21 и обыграй дилера', icon: '🃏', mount: mountBlackjack },
+  { id: 'rocket', title: 'Рокетка', blurb: 'Забери до взрыва — до x100', icon: '🚀', mount: mountRocket },
+  { id: 'shop', title: 'Магазин', blurb: 'Потрать поинты на призы', icon: '🛒', mount: mountShop },
 ];
+
+function titleNode(): HTMLSpanElement {
+  const title = el('span', 'title');
+  title.append(el('span', 'title-icon', '🎰 '), el('span', 'title-text', 'Казино отжиманий'));
+  return title;
+}
 
 const app = document.querySelector<HTMLDivElement>('#app');
 
@@ -53,9 +61,10 @@ function render(root: HTMLElement, user: Session['user']): void {
   const header = el('header', 'top');
   const back = el('button', 'back hidden', '← Меню');
   const balance = el('span', 'balance');
-  const who = el('span', 'user', user.name);
-  who.append(balance);
-  header.append(back, el('span', 'title', '🎰 Казино отжиманий'), who);
+  balance.title = 'Баланс, поинтов';
+  const who = el('div', 'who');
+  who.append(el('span', 'user', user.name), balance);
+  header.append(back, titleNode(), who);
   showBalanceIn(balance);
   void refreshBalance();
   const body = el('main', 'body');
@@ -65,12 +74,16 @@ function render(root: HTMLElement, user: Session['user']): void {
     cleanup?.();
     cleanup = null;
     back.classList.add('hidden');
+    header.classList.remove('in-game');
     const menu = el('div', 'menu');
     for (const game of games) {
-      const card = el('button', 'card');
-      card.append(el('span', 'card-icon', game.icon), el('span', 'card-title', game.title));
+      const card = el('button', `card ${game.id}`);
+      const text = el('span', 'card-text');
+      text.append(el('span', 'card-title', game.title), el('span', 'card-blurb', game.blurb));
+      card.append(el('span', 'card-icon', game.icon), text);
       card.addEventListener('click', () => {
         back.classList.remove('hidden');
+        header.classList.add('in-game');
         body.replaceChildren();
         cleanup = game.mount(body);
       });
@@ -85,7 +98,9 @@ function render(root: HTMLElement, user: Session['user']): void {
 
 function renderNotCitizen(root: HTMLElement, user: Session['user']): void {
   const header = el('header', 'top');
-  header.append(el('span', 'title', '🎰 Казино отжиманий'), el('span', 'user', user.name));
+  const who = el('div', 'who');
+  who.append(el('span', 'user', user.name));
+  header.append(el('span'), titleNode(), who);
   const body = el('main', 'body not-citizen');
   const img = el('img', 'not-citizen-img');
   img.src = 'not-citizen.png';
