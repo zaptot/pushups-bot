@@ -152,8 +152,8 @@ npm run build
 ```
 
 ### Cloudflare Worker
-Discloud отдаёт сайт с заголовком `X-Frame-Options: DENY`, из-за которого Discord не может показать казино
+Discloud отдаёт сайт с заголовком `X-Frame-Options` (`SAMEORIGIN`), из-за которого Discord не может показать казино
 во встроенном окне. Поэтому между ними стоит воркер [cloudflare/worker.js](cloudflare/worker.js)
-на `pushups.zaptot.workers.dev`: он пересылает запросы на `pushups.discloud.dev` и убирает этот заголовок.
+на `pushups.zaptot.workers.dev`: он пересылает запросы на `pushups.discloud.app` и убирает этот заголовок.
 В Discord Developer Portal → Activities → URL Mappings: `/` → `pushups.zaptot.workers.dev`.
 Код воркера правится в панели Cloudflare (Workers & Pages → pushups → Edit code).

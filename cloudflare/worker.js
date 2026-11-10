@@ -1,7 +1,7 @@
-// Прослойка между Discord и Discloud: Discloud ставит X-Frame-Options: DENY,
+// Прослойка между Discord и Discloud: Discloud ставит X-Frame-Options (DENY или SAMEORIGIN),
 // из-за чего Discord не может показать казино во встроенном окне. Воркер
 // пересылает запросы на сайт бота и убирает этот заголовок.
-const ORIGIN = "pushups.discloud.dev";
+const ORIGIN = "pushups.discloud.app";
 
 export default {
   async fetch(request) {
