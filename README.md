@@ -129,12 +129,31 @@ go test ./...
 Поэтому запускай их на своей тестовой базе, а не на боевой. Для разработки заведи и своего тестового бота.
 
 ## Деплой на Discloud
-Discloud сам собирает проект (`go mod download`, `go build`) по `discloud.config`.
-Секреты (`DISCORD_TOKEN`, `DATABASE_URL`, `PUBG_API_KEY` и т.д.) хранятся в переменных окружения приложения на Discloud,
-в репозиторий их не коммитить.
+Бот и казино работают одним приложением-сайтом на Discloud (тариф Platinum, поддомен `pushups`).
+Discloud сам собирает Go-проект (`go mod download`, `go build`) по `discloud.config` и обновляет приложение
+после каждого пуша в `main` через GitHub-интеграцию.
 
-Для обновления загрузи через Commit zip с файлами `*.go`, `go.mod`, `go.sum`, `discloud.config` (файлы `_test.go` не нужны).
-После обновления проверь логи: все строки бота начинаются с `[GO]`, при запуске есть `Запущен как ...`.
+Секреты хранятся в переменных окружения приложения на Discloud, в репозиторий их не коммитить:
+`DISCORD_TOKEN`, `DATABASE_URL`, `GUILD_ID`, `DOTA_CHANNEL_ID`, `CIVIC_CHANNEL_ID`, `PUBG_API_KEY`,
+`ACTIVITY_PORT=8080` (порт сайта на Discloud), `DISCORD_CLIENT_SECRET` (OAuth2 приложения в Discord).
 
-Если в логе сборки шаг `go build` помечен `CACHED`, хотя код менялся, Discloud взял старую сборку.
-Тогда создай приложение заново. Данные в Supabase при этом не пострадают, но переменные окружения придётся добавить снова.
+После обновления проверь логи: все строки бота начинаются с `[GO]`, при запуске есть `Запущен как ...`
+и `Казино: порт 8080`. Если в логе сборки шаг `go build` помечен `CACHED`, хотя код менялся,
+Discloud взял старую сборку: тогда пересоздай приложение (данные в Supabase не пострадают,
+переменные окружения придётся добавить снова).
+
+### Страница казино
+Discloud собирает только Go, поэтому собранная страница `activity/dist` хранится в репозитории.
+После изменений в `activity/src` пересобери её и закоммить вместе с кодом:
+```
+cd activity
+npm ci
+npm run build
+```
+
+### Cloudflare Worker
+Discloud отдаёт сайт с заголовком `X-Frame-Options: DENY`, из-за которого Discord не может показать казино
+во встроенном окне. Поэтому между ними стоит воркер [cloudflare/worker.js](cloudflare/worker.js)
+на `pushups.zaptot.workers.dev`: он пересылает запросы на `pushups.discloud.dev` и убирает этот заголовок.
+В Discord Developer Portal → Activities → URL Mappings: `/` → `pushups.zaptot.workers.dev`.
+Код воркера правится в панели Cloudflare (Workers & Pages → pushups → Edit code).

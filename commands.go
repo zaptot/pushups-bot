@@ -82,6 +82,7 @@ func commandList() []command {
 		cmd("top", "Лидерборд за последний год", topHandler, board),
 		cmd("history", "Последние записи участника", historyHandler, userOpt("user", "Чья история (по умолчанию — твоя)", false)),
 		cmd("undo", "Отменить свою последнюю запись (если ошибся)", undoHandler),
+		cmd("casino", "Открыть казино: рулетка, Plinko, блэкджек, рокетка (на фантики)", casinoHandler),
 
 		cmd("linkdota", "Привязать Dota-аккаунт к участнику", linkDotaHandler, userOpt("user", "Участник Discord", true),
 			strOpt("account", "Dota ID (Friend ID), Steam64 ID или ссылка на профиль Dotabuff/OpenDota", true)),
@@ -449,6 +450,19 @@ func historyHandler(r *request) error {
 	return r.replyEmbed(&discordgo.MessageEmbed{
 		Title: "История: " + t.Name, Description: orEmpty(strings.Join(lines, "\n"), "Записей нет."), Color: colorBlurple,
 	}, true)
+}
+
+// interactionLaunchActivity — ответ, открывающий Activity приложения (в discordgo пока нет константы).
+const interactionLaunchActivity discordgo.InteractionResponseType = 12
+
+func casinoHandler(r *request) error {
+	if !r.inGuild() {
+		return r.noGuild()
+	}
+	if cfg.ActivityPort == "" {
+		return r.replyHidden("Казино пока не запущено.")
+	}
+	return r.respond(nil, interactionLaunchActivity)
 }
 
 func undoHandler(r *request) error {

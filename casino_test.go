@@ -482,3 +482,11 @@ func TestCasinoDoubleCap(t *testing.T) {
 		t.Fatal("удвоение до максимума должно быть разрешено")
 	}
 }
+
+func TestCasinoAllowsDiscordFrame(t *testing.T) {
+	rec := httptest.NewRecorder()
+	allowDiscordFrame(http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	if got := rec.Header().Get("Content-Security-Policy"); !strings.Contains(got, "frame-ancestors") || !strings.Contains(got, "discordsays.com") {
+		t.Fatalf("нет разрешения на показ внутри Discord: %q", got)
+	}
+}

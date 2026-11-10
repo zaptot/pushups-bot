@@ -11,9 +11,9 @@ pushbot.zip
 logo.png
 logo.svg
 
-# казино (Discord Activity)
+# казино (Discord Activity); собранная страница activity/dist хранится в репозитории:
+# Discloud собирает только Go
 activity/node_modules/
-activity/dist/
 
 # сборка Go
 pushbot

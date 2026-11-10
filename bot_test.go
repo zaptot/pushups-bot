@@ -239,7 +239,7 @@ func TestPureLogic(t *testing.T) {
 	if ids, v = leaders([]ranked{{1, 30}, {2, 10}, {3, 30}}, false); len(ids) != 1 || ids[0] != 2 || v != 10 {
 		t.Error(ids, v)
 	}
-	if n := len(commandList()); n != 27 {
+	if n := len(commandList()); n != 28 {
 		t.Errorf("команд: %d", n)
 	}
 	for _, c := range commandList() {

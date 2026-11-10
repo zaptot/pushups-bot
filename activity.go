@@ -52,13 +52,24 @@ func activityMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/rocket/{id}", auth(handleRocketWait))
 	if st, err := os.Stat(cfg.ActivityDir); err == nil && st.IsDir() {
 		mux.Handle("/", http.FileServer(http.Dir(cfg.ActivityDir)))
+	} else if cfg.ActivityPort != "" {
+		log.Printf("Казино: нет папки страницы %s, открыт только API", cfg.ActivityDir)
 	}
 	return mux
 }
 
+const discordFrameAncestors = "frame-ancestors https://discord.com https://*.discord.com https://*.discordsays.com"
+
+func allowDiscordFrame(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", discordFrameAncestors)
+		next.ServeHTTP(w, r)
+	})
+}
+
 func serveActivity() {
 	defer protect("казино")
-	srv := &http.Server{Addr: ":" + cfg.ActivityPort, Handler: activityMux(), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: ":" + cfg.ActivityPort, Handler: allowDiscordFrame(activityMux()), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("Казино: порт %s, режим разработки %v", cfg.ActivityPort, cfg.ActivityDevUserID != 0)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Printf("Казино остановлено: %v", err)
