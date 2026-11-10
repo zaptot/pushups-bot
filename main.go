@@ -133,6 +133,9 @@ func main() {
 	if _, err := session.ApplicationCommandBulkOverwrite(session.State.User.ID, cfg.GuildID, defs); err != nil {
 		log.Fatalf("Не удалось зарегистрировать команды: %v", err)
 	}
+	if cfg.ActivityPort != "" {
+		go serveActivity()
+	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
