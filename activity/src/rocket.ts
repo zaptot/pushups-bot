@@ -1,3 +1,4 @@
+import { points, refreshBalance } from './wallet';
 import { request, type RocketPoll, type RocketResult, type RocketStart } from './api';
 import { el, errorText, hiDpiCanvas, stakeError, stakeField, type Cleanup } from './dom';
 
@@ -70,7 +71,7 @@ function draw(ctx: CanvasRenderingContext2D, growth: number, seconds: number, ph
 
 function verdict(res: RocketResult): string {
   return res.status === 'won'
-    ? `🤑 Забрал на x${res.multiplier.toFixed(2)}: выигрыш ${res.payout} фантиков. Ракета взорвалась бы на x${res.crash.toFixed(2)}`
+    ? `🤑 Забрал на x${res.multiplier.toFixed(2)}: выигрыш ${points(res.payout)}. Ракета взорвалась бы на x${res.crash.toFixed(2)}`
     : `💥 Взрыв на x${res.crash.toFixed(2)}`;
 }
 
@@ -117,6 +118,7 @@ export function mountRocket(root: HTMLElement): Cleanup {
     draw(ctx, round.growth, secondsTo(round.growth, end), res.status, end);
     status.textContent = verdict(res);
     console.log({ rocket: res });
+    void refreshBalance();
     button.textContent = 'Запуск';
     button.disabled = false;
     auto.disabled = false;
@@ -175,6 +177,7 @@ export function mountRocket(root: HTMLElement): Cleanup {
       }
       round = started;
       settled = false;
+      void refreshBalance();
       startedAt = performance.now();
       button.textContent = 'Забрать';
       button.disabled = false;

@@ -1,12 +1,16 @@
 package casino
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
 
+	"github.com/jackc/pgx/v5"
+
+	"pushups-bot/internal/economy"
 	"pushups-bot/internal/store"
 )
 
@@ -30,7 +34,7 @@ type bet struct {
 
 func validStake(n int) error {
 	if n < stakeMin || n > stakeMax {
-		return fmt.Errorf("Ставка — от %d до %d фантиков", stakeMin, stakeMax)
+		return fmt.Errorf("Ставка — от %d до %d поинтов", stakeMin, stakeMax)
 	}
 	return nil
 }
@@ -57,22 +61,46 @@ func replay(id string, userID int64) (json.RawMessage, bool, error) {
 	return result, true, nil
 }
 
-func settle(b bet) (json.RawMessage, error) {
+var errSettled = errors.New("ставка уже записана")
+
+// stakeMove — списание ставки (ref уникален, повтор не спишет дважды).
+func stakeMove(id, ref string, stake int) economy.Move {
+	return economy.Move{Amount: -stake, Ref: ref + ":" + id, BetID: id, Reason: "ставка в казино"}
+}
+
+// hold списывает ставку при начале партии, итог которой будет позже (блэкджек, рокетка).
+func hold(p player, id, ref string, stake int) error {
+	_, err := economy.Apply(p.GuildID, p.UserID, nil, stakeMove(id, ref, stake))
+	return err
+}
+
+// settle записывает итог ставки и начисляет выигрыш одной транзакцией.
+// debit — списать ставку здесь же (для игр в один ход; у блэкджека и рокетки она списана в hold).
+func settle(b bet, debit bool) (json.RawMessage, error) {
 	result, err := json.Marshal(b.Result)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := store.Ctx()
-	defer cancel()
-	tag, err := store.DB.Exec(ctx, `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
-		b.ID, b.GuildID, b.UserID, b.Game, b.Stake, b.Multiplier, b.Payout, result)
-	if err != nil {
-		return nil, err
+	var moves []economy.Move
+	if debit {
+		moves = append(moves, stakeMove(b.ID, "stake", b.Stake))
 	}
-	if tag.RowsAffected() == 0 {
+	moves = append(moves, economy.Move{Amount: b.Payout, Ref: "win:" + b.ID, BetID: b.ID, Reason: "выигрыш в казино"})
+	_, err = economy.Apply(b.GuildID, b.UserID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
+			b.ID, b.GuildID, b.UserID, b.Game, b.Stake, b.Multiplier, b.Payout, result)
+		if err == nil && tag.RowsAffected() == 0 {
+			err = errSettled
+		}
+		return err
+	}, moves...)
+	if errors.Is(err, errSettled) {
 		stored, _, err := replay(b.ID, b.UserID)
 		return stored, err
+	}
+	if err != nil {
+		return nil, err
 	}
 	return result, nil
 }

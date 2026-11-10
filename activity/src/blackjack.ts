@@ -1,3 +1,4 @@
+import { points, refreshBalance } from './wallet';
 import { request, type BlackjackAction, type BlackjackState, type BlackjackStatus } from './api';
 import { el, errorText, stakeError, stakeField, type Cleanup } from './dom';
 
@@ -82,7 +83,7 @@ export function mountBlackjack(root: HTMLElement): Cleanup {
     if (next.status === 'playing') {
       status.textContent = `Ставка ${next.stake}. Ещё или хватит?`;
     } else {
-      status.textContent = `${outcomes[next.status]} — ставка ${next.stake}, выигрыш ${next.payout} фантиков`;
+      status.textContent = `${outcomes[next.status]} — ставка ${next.stake}, выигрыш ${points(next.payout)}`;
       console.log({ blackjack: next });
     }
     setButtons(false);
@@ -95,6 +96,7 @@ export function mountBlackjack(root: HTMLElement): Cleanup {
       if (!disposed) {
         render(next ?? state);
       }
+      void refreshBalance();
     } catch (e) {
       if (!disposed) {
         status.textContent = errorText(e);

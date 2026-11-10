@@ -87,6 +87,6 @@ func handleRoulette(w http.ResponseWriter, r *http.Request, p player) {
 		ID: req.ID, GuildID: p.GuildID, UserID: p.UserID, Game: "roulette",
 		Stake: req.Stake, Multiplier: mult, Payout: payout,
 		Result: rouletteResult{Number: n, Multiplier: mult, Payout: payout},
-	})
+	}, true)
 	respondBet(w, raw, err, p)
 }

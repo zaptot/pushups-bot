@@ -82,7 +82,7 @@ func (r *rocketRound) finish(m float64) {
 		ID: r.ID, GuildID: r.p.GuildID, UserID: r.p.UserID, Game: "rocket",
 		Stake: r.Stake, Multiplier: mult, Payout: payout,
 		Result: rocketResult{Status: status, Multiplier: mult, Crash: r.crash, Payout: payout},
-	})
+	}, false)
 	delete(rocketActive, playerKey(r.p))
 	close(r.done)
 	time.AfterFunc(rocketKeep, func() {
@@ -117,8 +117,13 @@ func handleRocketStart(w http.ResponseWriter, r *http.Request, p player) {
 	if tooFast(w, p) {
 		return
 	}
+	id := randomID(16)
+	if err := hold(p, id, "stake", req.Stake); err != nil {
+		respondBet(w, nil, err, p)
+		return
+	}
 	round := &rocketRound{
-		ID: randomID(16), p: p, Stake: req.Stake, Auto: math.Floor(req.Auto*100) / 100,
+		ID: id, p: p, Stake: req.Stake, Auto: math.Floor(req.Auto*100) / 100,
 		crash: crashPoint(rand.Float64()), started: time.Now(), done: make(chan struct{}),
 	}
 	target := round.crash

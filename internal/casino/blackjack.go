@@ -197,7 +197,7 @@ func blackjackStep(h *blackjackHand) (json.RawMessage, error) {
 	return settle(bet{
 		ID: h.ID, GuildID: h.p.GuildID, UserID: h.p.UserID, Game: "blackjack",
 		Stake: h.Stake, Multiplier: h.Mult, Payout: h.Payout, Result: h.view(),
-	})
+	}, false)
 }
 
 func blackjackTimeout(key [2]int64, id string) {
@@ -250,7 +250,12 @@ func handleBlackjackStart(w http.ResponseWriter, r *http.Request, p player) {
 	if tooFast(w, p) {
 		return
 	}
-	h := newBlackjackHand(randomID(16), p, req.Stake, shuffledDeck())
+	id := randomID(16)
+	if err := hold(p, id, "stake", req.Stake); err != nil {
+		respondBet(w, nil, err, p)
+		return
+	}
+	h := newBlackjackHand(id, p, req.Stake, shuffledDeck())
 	h.timer = time.AfterFunc(blackjackIdle, func() { blackjackTimeout(key, h.ID) })
 	if h.Status == "playing" {
 		blackjackHands[key] = h
@@ -284,6 +289,12 @@ func handleBlackjackAction(w http.ResponseWriter, r *http.Request, p player) {
 		raw, err := json.Marshal(h.view())
 		respondBet(w, raw, err, p)
 		return
+	}
+	if req.Action == "double" && h.canDouble() {
+		if err := hold(p, h.ID, "stake2", h.Stake); err != nil {
+			respondBet(w, nil, err, p)
+			return
+		}
 	}
 	if err := h.act(req.Action); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())

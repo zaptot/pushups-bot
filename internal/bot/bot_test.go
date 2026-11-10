@@ -205,6 +205,10 @@ func TestPureLogic(t *testing.T) {
 			t.Errorf("pubg %v: %d %d", c, p, u)
 		}
 	}
+	jan := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if got := addMonths(jan, -3); got.Month() != time.October || got.Year() != 2025 {
+		t.Error(got)
+	}
 	ids, v := leaders([]ranked{{1, 30}, {2, 10}, {3, 30}}, true)
 	if len(ids) != 2 || v != 30 {
 		t.Error(ids, v)
@@ -212,7 +216,7 @@ func TestPureLogic(t *testing.T) {
 	if ids, v = leaders([]ranked{{1, 30}, {2, 10}, {3, 30}}, false); len(ids) != 1 || ids[0] != 2 || v != 10 {
 		t.Error(ids, v)
 	}
-	if n := len(commandList()); n != 27 {
+	if n := len(commandList()); n != 29 {
 		t.Errorf("команд: %d", n)
 	}
 	for _, c := range commandList() {
@@ -253,6 +257,22 @@ func TestPushupCommands(t *testing.T) {
 	want(t, fake, "Казино ставок не возвращает")
 	run(7, "top", str("board", "done"))
 	want(t, fake, "**60**")
+
+	// экономика: 100 стартовых + 60 сделанных; потраченные поинты не дают отменить /done
+	run(7, "status")
+	want(t, fake, "160 поинтов")
+	run(7, "shop")
+	want(t, fake, "Ваучер Steam 5 $")
+	run(7, "buy", str("item", "voucher"))
+	want(t, fake, "Не хватает")
+	run(7, "done", num("amount", 900))
+	run(7, "buy", str("item", "voucher"))
+	want(t, fake, "Выдаёт админ. Осталось 60 поинтов")
+	run(7, "undo")
+	want(t, fake, "уже потрачены")
+	if entries(t, 7).Done != 960 {
+		t.Fatal("потраченные отжимания отменились")
+	}
 }
 
 func TestCitizenshipAndPolls(t *testing.T) {
@@ -526,12 +546,19 @@ func TestPubgProcessing(t *testing.T) {
 	want(t, fake, "account.a1")
 }
 
-func TestRankRoles(t *testing.T) {
-	setup(t)
-	played := time.Now().AddDate(0, 0, -5)
+func TestAwards(t *testing.T) {
+	fake := setup(t)
+	session.State.GuildAdd(&discordgo.Guild{ID: testGuild})
+	session.State.ChannelAdd(&discordgo.Channel{ID: "777", GuildID: testGuild})
+	cfg.CivicChannelID = "777"
+	now := time.Now().In(cfg.Location)
+	monthEnd := time.Date(now.Year(), now.Month()-(now.Month()-1)%3, 1, 0, 0, 0, 0, cfg.Location) // начало квартала
+	played := monthEnd.AddDate(0, 0, -5)
+	mustExec(t, "INSERT INTO dota_links (guild_id, user_id, account_id, linked_by, linked_at) VALUES (1, 1, 1, 0, $1)", played.AddDate(0, -3, 0))
 	for _, id := range []int64{1, 2, 3} {
 		mustExec(t, "INSERT INTO citizens (guild_id, user_id) VALUES (1, $1)", id)
 	}
+	mustExec(t, "INSERT INTO marginals (guild_id, user_id) VALUES (1, 3)")
 	game := func(user int64, matchID, pushups int) {
 		mustExec(t, `INSERT INTO dota_matches (guild_id, user_id, match_id, kills, deaths, assists, pushups, played_at)
 			VALUES (1, $1, $2, 0, 0, 0, $3, $4)`, user, matchID, pushups, played)
@@ -539,18 +566,31 @@ func TestRankRoles(t *testing.T) {
 	for i := range 11 {
 		game(1, 1000+i, 30)
 		game(2, 2000+i, 10)
+		game(3, 3000+i, 70)
 	}
-	game(3, 3000, 70) // мало игр — в рейтинг не попадает
+	if err := maybeRunAwards(testGuildID); err != nil {
+		t.Fatal(err)
+	}
+	text := fake.text()
+	if !strings.Contains(text, "назначено, 330") || !strings.Contains(text, "назначено, 110") || strings.Contains(text, "назначено, 770") {
+		t.Fatal(text)
+	}
+	if !strings.Contains(text, "снова участвуют") || !strings.Contains(text, "@3") {
+		t.Fatal(text)
+	}
+	fake.reset()
+	if n := count(t, "SELECT count(*)::int FROM marginals WHERE guild_id = 1"); n != 0 {
+		t.Fatal(n)
+	}
+	if err := maybeRunAwards(testGuildID); err != nil {
+		t.Fatal(err)
+	}
+	if fake.text() != "" {
+		t.Fatal("награды выданы дважды", fake.text())
+	}
 	scores, games, err := periodScores(testGuildID, played.Add(-time.Hour), played.Add(time.Hour))
-	if err != nil || scores[1] != 330 || games[2] != 11 || games[3] != 1 {
+	if err != nil || scores[1] != 330 || games[2] != 11 {
 		t.Fatal(scores, games, err)
-	}
-	ranking, err := eligibleRanking(testGuildID, played.Add(-time.Hour), played.Add(time.Hour))
-	if err != nil || len(ranking) != 2 {
-		t.Fatal(ranking, err)
-	}
-	if top, v := leaders(ranking, true); len(top) != 1 || top[0] != 1 || v != 330 {
-		t.Fatal(top, v)
 	}
 }
 

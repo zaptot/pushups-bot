@@ -2,9 +2,12 @@
 package config
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
+	_ "time/tzdata" // часовые пояса внутри бинарника, чтобы не зависеть от хостинга
 
 	"github.com/joho/godotenv"
 )
@@ -12,9 +15,10 @@ import (
 // Config читается из окружения (на Discloud) или из файла .env (локально).
 type Config struct {
 	Token, GuildID, DatabaseURL     string
-	DotaChannelID                   string
+	DotaChannelID, CivicChannelID   string
 	OpenDotaKey, PubgKey, PubgShard string
 	DotaCheckMinutes                int
+	Location                        *time.Location
 	ActivityPort, ActivityDir       string
 	ClientID, ClientSecret          string
 	ActivityDevUserID               int64
@@ -43,10 +47,16 @@ func Load() {
 		ClientSecret:  os.Getenv("DISCORD_CLIENT_SECRET"),
 	}
 	cfg.ActivityDevUserID, _ = strconv.ParseInt(os.Getenv("ACTIVITY_DEV_USER_ID"), 10, 64)
+	cfg.CivicChannelID = envOr("CIVIC_CHANNEL_ID", cfg.DotaChannelID)
 	cfg.DotaCheckMinutes, _ = strconv.Atoi(envOr("DOTA_CHECK_MINUTES", "30"))
 	if cfg.DotaCheckMinutes <= 0 {
 		cfg.DotaCheckMinutes = 30
 	}
+	loc, err := time.LoadLocation(envOr("TIMEZONE", "Europe/Berlin"))
+	if err != nil {
+		log.Fatalf("Неверный TIMEZONE: %v", err)
+	}
+	cfg.Location = loc
 }
 
 func envOr(key, fallback string) string {

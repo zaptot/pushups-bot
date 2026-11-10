@@ -432,7 +432,7 @@ func pollDescription(p *poll) string {
 	case "law":
 		return fmt.Sprintf("%s предлагает закон:\n> %s\n\nПринимается простым большинством голосов.", mention(p.CreatorID), p.text())
 	case "marginal":
-		return fmt.Sprintf("Признать %s маргиналом? Он получит роль «Маргинал».\n"+
+		return fmt.Sprintf("Признать %s маргиналом? Он не будет участвовать в ближайшей выдаче наград.\n"+
 			"Нужно, чтобы «за» проголосовали больше половины граждан (кроме него самого).", mention(p.target()))
 	}
 	if p.Status == "nominating" {
@@ -668,7 +668,7 @@ func resolvePoll(p *poll) error {
 			if err := store.Exec("INSERT INTO marginals (guild_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", gid, target); err != nil {
 				return err
 			}
-			result = fmt.Sprintf("%s признан маргиналом (%d из %d за) и получает роль «Маргинал».", mention(target), yes, n)
+			result = fmt.Sprintf("%s признан маргиналом (%d из %d за) и пропустит ближайшую выдачу наград.", mention(target), yes, n)
 		} else {
 			result = fmt.Sprintf("%s не маргинал (%d из %d за).", mention(target), yes, n)
 		}
@@ -869,7 +869,7 @@ func revokeHandler(r *request) error {
 }
 
 func marginalHandler(r *request) error {
-	user, err := targetPollChecks(r, "marginal", "%s не гражданин.")
+	user, err := targetPollChecks(r, "marginal", "%s не гражданин — в наградах он и так не участвует.")
 	if user == nil {
 		return err
 	}
@@ -938,7 +938,7 @@ func nominateHandler(r *request) error {
 	return nil
 }
 
-// ---------- роли по итогам игр ----------
+// ---------- роли по итогам и награды ----------
 
 // periodScores: назначено за матчи Dota/PUBG и суд, число игр Dota + PUBG за период [start, end).
 func periodScores(guildID int64, start, end time.Time) (scores, games map[int64]int, err error) {
@@ -977,8 +977,8 @@ type ranked struct {
 	Score  int
 }
 
-// eligibleRanking: граждане без заморозки, сыгравшие больше rankMinGames игр.
-func eligibleRanking(guildID int64, start, end time.Time) ([]ranked, error) {
+// eligibleRanking: граждане без заморозки, сыгравшие больше awardMinGames игр.
+func eligibleRanking(guildID int64, start, end time.Time, skipMarginals bool) ([]ranked, error) {
 	scores, games, err := periodScores(guildID, start, end)
 	if err != nil {
 		return nil, err
@@ -987,9 +987,15 @@ func eligibleRanking(guildID int64, start, end time.Time) ([]ranked, error) {
 	if err != nil {
 		return nil, err
 	}
+	var marginals []int64
+	if skipMarginals {
+		if marginals, err = marginalIDs(guildID); err != nil {
+			return nil, err
+		}
+	}
 	var out []ranked
 	for _, u := range users {
-		if games[u] > rankMinGames {
+		if games[u] > awardMinGames && !slices.Contains(marginals, u) {
 			out = append(out, ranked{u, scores[u]})
 		}
 	}
@@ -1015,7 +1021,7 @@ func leaders(ranking []ranked, best bool) ([]int64, int) {
 // syncRankRoles: Топ руинер и Порядочный гражданин — по назначенным отжиманиям за последние 30 дней.
 func syncRankRoles(guildID int64) error {
 	end := time.Now()
-	ranking, err := eligibleRanking(guildID, end.AddDate(0, 0, -30), end)
+	ranking, err := eligibleRanking(guildID, end.AddDate(0, 0, -30), end, false)
 	if err != nil {
 		return err
 	}
@@ -1030,6 +1036,71 @@ func syncRankRoles(guildID int64) error {
 	return setRoleHolders(guildID, "decent", bottom)
 }
 
+func addMonths(t time.Time, n int) time.Time {
+	return time.Date(t.Year(), t.Month()+time.Month(n), 1, 0, 0, 0, 0, t.Location())
+}
+
+func awardText(guildID int64, start, end time.Time, prize string) (string, error) {
+	ranking, err := eligibleRanking(guildID, start, end, true)
+	if err != nil {
+		return "", err
+	}
+	if len(ranking) == 0 {
+		return fmt.Sprintf("Никто из граждан не сыграл больше %d пати-игр — %s никому.", awardMinGames, prize), nil
+	}
+	top, topValue := leaders(ranking, true)
+	bottom, bottomValue := leaders(ranking, false)
+	return fmt.Sprintf("😈 Топ-1 (больше всех назначено, %d): %s — %s\n😇 Боттом-1 (меньше всех назначено, %d): %s — %s",
+		topValue, mentions(top), prize, bottomValue, mentions(bottom), prize), nil
+}
+
+// maybeRunAwards раз в квартал (1 января, апреля, июля, октября или при первом запуске после) подводит итоги прошлого квартала.
+func maybeRunAwards(guildID int64) error {
+	now := time.Now().In(cfg.Location)
+	quarterEnd := time.Date(now.Year(), now.Month()-(now.Month()-1)%3, 1, 0, 0, 0, 0, cfg.Location)
+	quarterStart := addMonths(quarterEnd, -3)
+	lastMonth := addMonths(quarterEnd, -1)
+	// ключ — последний месяц квартала, как у прежних ежемесячных итогов, чтобы квартал не объявили дважды
+	period := fmt.Sprintf("%d-%02d", lastMonth.Year(), int(lastMonth.Month()))
+	var claimed string
+	found, err := store.FetchOne("INSERT INTO award_runs (guild_id, period) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING period", []any{guildID, period}, &claimed)
+	if err != nil || !found {
+		return err // уже подводили
+	}
+	var firstLink *time.Time
+	if _, err := store.FetchOne(`SELECT min(linked_at) FROM (SELECT linked_at FROM dota_links WHERE guild_id = $1
+		UNION ALL SELECT linked_at FROM pubg_links WHERE guild_id = $1) AS l`, []any{guildID}, &firstLink); err != nil {
+		return err
+	}
+	if firstLink == nil || !quarterEnd.After(*firstLink) {
+		return nil // квартал целиком до начала учёта матчей
+	}
+	quarter, err := awardText(guildID, quarterStart, quarterEnd, "грамота и медаль 🏅")
+	if err != nil {
+		return err
+	}
+	parts := []string{fmt.Sprintf("**Итоги квартала (%s — %s %d)**", months[quarterStart.Month()-1], months[lastMonth.Month()-1], lastMonth.Year()), quarter}
+	marginals, err := marginalIDs(guildID)
+	if err != nil {
+		return err
+	}
+	if len(marginals) > 0 {
+		parts = append(parts, "", "Маргиналы пропустили эту выдачу и снова участвуют: "+mentions(marginals))
+	}
+	if err := store.Exec("DELETE FROM marginals WHERE guild_id = $1", guildID); err != nil {
+		return err
+	}
+	if err := syncRoles(guildID); err != nil {
+		log.Printf("Не удалось обновить роли: %v", err)
+	}
+	if g, ok := channelGuild(cfg.CivicChannelID); ok && g == guildID {
+		sendEmbeds(cfg.CivicChannelID, []*discordgo.MessageEmbed{{
+			Title: "🏆 Награды", Description: strings.Join(parts, "\n"), Color: colorGold, Footer: footer("Награды выдаёт админ"),
+		}})
+	}
+	return nil
+}
+
 func civicLoop() {
 	session.State.RLock()
 	ids := make([]int64, 0, len(session.State.Guilds))
@@ -1038,6 +1109,9 @@ func civicLoop() {
 	}
 	session.State.RUnlock()
 	for _, id := range ids {
+		if err := maybeRunAwards(id); err != nil {
+			log.Printf("Ошибка наград на %d: %v", id, err)
+		}
 		if err := syncRankRoles(id); err != nil {
 			log.Printf("Ошибка ролей на %d: %v", id, err)
 		}

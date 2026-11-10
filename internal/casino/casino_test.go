@@ -14,6 +14,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
+	"pushups-bot/internal/economy"
 	"pushups-bot/internal/store"
 	"pushups-bot/internal/store/storetest"
 )
@@ -468,6 +469,27 @@ func TestCasinoReplay(t *testing.T) {
 	if n := count(t, "SELECT count(*) FROM casino_bets WHERE id = 'replay-1'"); n != 1 {
 		t.Fatalf("записей в casino_bets %d, ждали 1", n)
 	}
+	_, bal := casinoCall(t, mux, "GET", "/api/balance", token, nil)
+	if want := float64(economy.StartBonus - 20 + int(first["payout"].(float64))); bal["balance"] != want {
+		t.Fatalf("баланс %v, ждали %v", bal["balance"], want)
+	}
+	if code, out := casinoCall(t, mux, "POST", "/api/blackjack", token, map[string]any{"stake": 5000}); code != http.StatusUnprocessableEntity || !strings.Contains(out["error"].(string), "Не хватает") {
+		t.Fatalf("ставка больше баланса: %d %v", code, out)
+	}
+	if code, out := casinoCall(t, mux, "POST", "/api/shop/buy", token, map[string]any{"item": "voucher"}); code != http.StatusUnprocessableEntity {
+		t.Fatalf("покупка без денег: %d %v", code, out)
+	}
+	code, out := casinoCall(t, mux, "POST", "/api/rocket", token, map[string]any{"stake": 30, "auto": 0})
+	if code != http.StatusOK {
+		t.Fatalf("рокетка: %d %v", code, out)
+	}
+	_, after := casinoCall(t, mux, "GET", "/api/balance", token, nil)
+	if after["balance"] != bal["balance"].(float64)-30 {
+		t.Fatalf("ставка рокетки не списалась сразу: %v -> %v", bal, after)
+	}
+	rocketMu.Lock()
+	rocketRounds[out["id"].(string)].finish(1.5)
+	rocketMu.Unlock()
 	other := newPlayer(player{UserID: 502, GuildID: testGuildID})
 	if code, _ := casinoCall(t, mux, "POST", "/api/roulette", other, body); code != http.StatusConflict {
 		t.Fatalf("чужой id ставки: ждали 409, получили %d", code)

@@ -6,6 +6,8 @@ import { mountBlackjack } from './blackjack';
 import { mountPlinko } from './plinko';
 import { mountRocket } from './rocket';
 import { mountRoulette } from './roulette';
+import { mountShop } from './shop';
+import { refreshBalance, showBalanceIn } from './wallet';
 
 interface Game {
   title: string;
@@ -18,6 +20,7 @@ const games: Game[] = [
   { title: 'Plinko', icon: '🔻', mount: mountPlinko },
   { title: 'Блэкджек', icon: '🃏', mount: mountBlackjack },
   { title: 'Рокетка', icon: '🚀', mount: mountRocket },
+  { title: 'Магазин', icon: '🛒', mount: mountShop },
 ];
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -49,7 +52,12 @@ function render(root: HTMLElement, user: Session['user']): void {
   let cleanup: Cleanup | null = null;
   const header = el('header', 'top');
   const back = el('button', 'back hidden', '← Меню');
-  header.append(back, el('span', 'title', '🎰 Казино отжиманий'), el('span', 'user', user.name));
+  const balance = el('span', 'balance');
+  const who = el('span', 'user', user.name);
+  who.append(balance);
+  header.append(back, el('span', 'title', '🎰 Казино отжиманий'), who);
+  showBalanceIn(balance);
+  void refreshBalance();
   const body = el('main', 'body');
   root.replaceChildren(header, body);
 

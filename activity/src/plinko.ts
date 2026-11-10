@@ -1,3 +1,4 @@
+import { points, refreshBalance, spend } from './wallet';
 import { request, type PlinkoResult, type PlinkoRisk, type PlinkoTables } from './api';
 import { el, errorText, hiDpiCanvas, stakeError, stakeField, type Cleanup } from './dom';
 
@@ -95,7 +96,7 @@ function drawBoard(ctx: CanvasRenderingContext2D, g: Geometry, table: number[], 
 
 function verdict(res: PlinkoResult): string {
   const mood = res.multiplier >= 1 ? '🤑' : '💀';
-  return `${mood} x${res.multiplier}: выигрыш ${res.payout} фантиков`;
+  return `${mood} x${res.multiplier}: выигрыш ${points(res.payout)}`;
 }
 
 export function mountPlinko(root: HTMLElement): Cleanup {
@@ -187,6 +188,7 @@ export function mountPlinko(root: HTMLElement): Cleanup {
       }
       drawBoard(ctx, g, tables?.[String(res.rows)]?.[res.risk] ?? [], res.slot, null);
       status.textContent = verdict(res);
+      void refreshBalance();
       setBusy(false);
     };
     frame = requestAnimationFrame(step);
@@ -206,6 +208,7 @@ export function mountPlinko(root: HTMLElement): Cleanup {
         return;
       }
       console.log({ plinko: res });
+      spend(amount);
       animate(res);
     } catch (e) {
       if (!disposed) {

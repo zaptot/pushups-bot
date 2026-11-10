@@ -1,4 +1,4 @@
-// Package bot — Discord-бот: отжимания, матчи Dota 2 и PUBG, гражданство, суд, законы и роли.
+// Package bot — Discord-бот: отжимания, матчи Dota 2 и PUBG, гражданство, суд, законы и награды.
 package bot
 
 import (
@@ -62,7 +62,7 @@ func onReady(s *discordgo.Session, ready *discordgo.Ready) {
 		every(time.Duration(cfg.DotaCheckMinutes)*time.Minute, "автопроверке Dota", dotaLoop)
 		every(time.Duration(cfg.DotaCheckMinutes)*time.Minute, "автопроверке PUBG", pubgLoop)
 		every(time.Minute, "подведении итогов", pollsLoop)
-		every(time.Hour, "ролях по итогам игр", civicLoop)
+		every(time.Hour, "ролях и наградах", civicLoop)
 	})
 }
 

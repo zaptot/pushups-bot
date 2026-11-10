@@ -27,7 +27,7 @@ export function stakeField(initial = 20): StakeField {
   input.min = String(stakeMin);
   input.max = String(stakeMax);
   input.value = String(initial);
-  const row = el('label', 'stake-row', 'Ставка, фантиков');
+  const row = el('label', 'stake-row', 'Ставка, поинтов');
   row.append(input);
   const read = (): number | null => {
     const n = Number(input.value);
@@ -36,7 +36,7 @@ export function stakeField(initial = 20): StakeField {
   return { row, read };
 }
 
-export const stakeError = `Ставка — от ${stakeMin} до ${stakeMax} фантиков`;
+export const stakeError = `Ставка — от ${stakeMin} до ${stakeMax} поинтов`;
 
 export const errorText = (e: unknown): string => (e instanceof Error ? e.message : 'Что-то пошло не так');
 

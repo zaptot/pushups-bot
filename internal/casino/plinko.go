@@ -104,6 +104,6 @@ func handlePlinko(w http.ResponseWriter, r *http.Request, p player) {
 		ID: req.ID, GuildID: p.GuildID, UserID: p.UserID, Game: "plinko",
 		Stake: req.Stake, Multiplier: mult, Payout: payout,
 		Result: plinkoResult{Rows: req.Rows, Risk: req.Risk, Path: path, Slot: slot, Multiplier: mult, Payout: payout},
-	})
+	}, true)
 	respondBet(w, raw, err, p)
 }

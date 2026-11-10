@@ -1,3 +1,4 @@
+import { points, refreshBalance, spend } from './wallet';
 import { request, type RouletteBet, type RouletteResult } from './api';
 import { el, errorText, hiDpiCanvas, stakeError, stakeField, type Cleanup } from './dom';
 
@@ -109,7 +110,7 @@ function drawWheel(ctx: CanvasRenderingContext2D, angle: number, shown: number |
 
 function verdict(res: RouletteResult): string {
   const head = `Выпало ${res.number}.`;
-  return res.payout > 0 ? `${head} 🤑 Выигрыш ${res.payout} фантиков (x${res.multiplier})` : `${head} 💀 Мимо`;
+  return res.payout > 0 ? `${head} 🤑 Выигрыш ${points(res.payout)} (x${res.multiplier})` : `${head} 💀 Мимо`;
 }
 
 export function mountRoulette(root: HTMLElement): Cleanup {
@@ -181,10 +182,12 @@ export function mountRoulette(root: HTMLElement): Cleanup {
         return;
       }
       console.log({ roulette: res });
+      spend(amount);
       animate(targetAngle(angle, wheelOrder.indexOf(res.number)), () => {
         drawWheel(ctx, angle, res.number);
         status.textContent = verdict(res);
         spin.disabled = false;
+        void refreshBalance();
       });
     } catch (e) {
       if (!disposed) {

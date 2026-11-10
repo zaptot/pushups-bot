@@ -17,6 +17,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 
 	"pushups-bot/internal/config"
+	"pushups-bot/internal/economy"
 	"pushups-bot/internal/shared"
 	"pushups-bot/internal/store"
 )
@@ -55,6 +56,9 @@ func activityMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/config", handleConfig)
 	mux.HandleFunc("POST /api/session", handleSession)
+	mux.HandleFunc("GET /api/balance", auth(handleBalance))
+	mux.HandleFunc("GET /api/shop", auth(handleShop))
+	mux.HandleFunc("POST /api/shop/buy", auth(handleBuy))
 	mux.HandleFunc("POST /api/roulette", auth(handleRoulette))
 	mux.HandleFunc("GET /api/plinko/tables", auth(handlePlinkoTables))
 	mux.HandleFunc("POST /api/plinko", auth(handlePlinko))
@@ -90,6 +94,12 @@ var (
 func Serve(s *discordgo.Session) {
 	session = s
 	defer shared.Protect("казино")
+	// партии блэкджека и рокетки живут в памяти: после перезапуска возвращаем их ставки
+	if n, err := economy.RefundUnsettled(); err != nil {
+		log.Printf("Казино: не удалось вернуть незавершённые ставки: %v", err)
+	} else if n > 0 {
+		log.Printf("Казино: возвращено незавершённых ставок: %d", n)
+	}
 	srv := &http.Server{Addr: ":" + cfg.ActivityPort, Handler: allowDiscordFrame(activityMux()), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("Казино: порт %s, режим разработки %v", cfg.ActivityPort, cfg.ActivityDevUserID != 0)
 	if err := srv.ListenAndServe(); err != nil {
@@ -311,6 +321,10 @@ func replayed(w http.ResponseWriter, id string, p player) bool {
 }
 
 func respondBet(w http.ResponseWriter, raw json.RawMessage, err error, p player) {
+	if errors.Is(err, economy.ErrNotEnough) {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	if err != nil {
 		log.Printf("Казино: ошибка ставки %d: %v", p.UserID, err)
 		writeError(w, http.StatusInternalServerError, "Что-то пошло не так, попробуй ещё раз")

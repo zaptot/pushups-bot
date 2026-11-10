@@ -2,6 +2,7 @@ package bot
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
+	"pushups-bot/internal/economy"
 	"pushups-bot/internal/shared"
 	"pushups-bot/internal/store"
 )
@@ -73,7 +75,9 @@ func commandList() []command {
 		cmd("top", "Лидерборд за последний год", topHandler, board),
 		cmd("history", "Последние записи участника", historyHandler, userOpt("user", "Чья история (по умолчанию — твоя)", false)),
 		cmd("undo", "Отменить свою последнюю запись (если ошибся)", undoHandler),
-		cmd("casino", "Открыть казино: рулетка, Plinko, блэкджек, рокетка (на фантики)", casinoHandler),
+		cmd("casino", "Открыть казино на поинты: рулетка, Plinko, блэкджек, рокетка, магазин", casinoHandler),
+		cmd("shop", "Магазин: что можно купить за поинты", shopHandler),
+		cmd("buy", "Купить товар за поинты", buyHandler, shopItemOpt()),
 
 		cmd("linkdota", "Привязать Dota-аккаунт к участнику", linkDotaHandler, userOpt("user", "Участник Discord", true),
 			strOpt("account", "Dota ID (Friend ID), Steam64 ID или ссылка на профиль Dotabuff/OpenDota", true)),
@@ -96,7 +100,7 @@ func commandList() []command {
 		cmd("accuse", "Обвинить участника (решают граждане)", accuseHandler, userOpt("user", "Кого обвиняешь", true),
 			intOpt("pushups", "Наказание в отжиманиях", true, 1, 1000), strOpt("reason", "В чём обвинение", true), hoursOpt()),
 		cmd("revoke", "Голосование за лишение гражданства (нужно ⅔ граждан)", revokeHandler, userOpt("user", "Кого лишить гражданства", true), hoursOpt()),
-		cmd("marginal", "Голосование: признать гражданина маргиналом", marginalHandler, userOpt("user", "Кого признать маргиналом", true), hoursOpt()),
+		cmd("marginal", "Голосование: признать гражданина маргиналом (без наград)", marginalHandler, userOpt("user", "Кого признать маргиналом", true), hoursOpt()),
 		cmd("propose", "Предложить закон (референдум на 1 день)", proposeHandler, lawText),
 		cmd("election", "Начать выборы президента", electionHandler),
 		cmd("nominate", "Выдвинуть себя в президенты (во время выборов)", nominateHandler),
@@ -223,6 +227,10 @@ func statusHandler(r *request) error {
 	if err != nil {
 		return err
 	}
+	bal, err := economy.Balance(r.guildID(), t.ID)
+	if err != nil {
+		return err
+	}
 	civic := "не гражданин"
 	citizen, err := isCitizen(r.guildID(), t.ID)
 	if err != nil {
@@ -247,6 +255,7 @@ func statusHandler(r *request) error {
 			field("Осталось", fmt.Sprint(st.Remaining()), true),
 			field("Сделано", fmt.Sprint(st.Done), true),
 			field("Назначено", fmt.Sprint(st.Owed), true),
+			field("💰 Поинты", economy.Points(bal), true),
 			field("Статус", civic, false),
 		},
 		Footer: footer(fmt.Sprintf("За последние %d дней", windowDays)),
@@ -355,9 +364,10 @@ func undoHandler(r *request) error {
 	var kind string
 	var amount int
 	var reason *string
-	found, err := store.FetchOne(`SELECT id, user_id, kind, amount, reason FROM entries
+	var createdAt time.Time
+	found, err := store.FetchOne(`SELECT id, user_id, kind, amount, reason, created_at FROM entries
 		WHERE guild_id = $1 AND author_id = $2 ORDER BY id DESC LIMIT 1`,
-		[]any{r.guildID(), r.userID()}, &id, &userID, &kind, &amount, &reason)
+		[]any{r.guildID(), r.userID()}, &id, &userID, &kind, &amount, &reason, &createdAt)
 	if err != nil {
 		return err
 	}
@@ -367,6 +377,15 @@ func undoHandler(r *request) error {
 	if kind == "done" && reason != nil && strings.HasPrefix(*reason, "🎰 лудомания:") {
 		return r.replyHidden("🎰 Казино ставок не возвращает: бросок лудомании отменить нельзя.")
 	}
+	if kind == "done" {
+		ok, bal, err := economy.CanUndoDone(r.guildID(), userID, amount, createdAt)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return r.replyHidden(fmt.Sprintf("Нельзя: поинты за эти %d отжиманий уже потрачены (на балансе %s).", amount, economy.Points(bal)))
+		}
+	}
 	if err := store.Exec("DELETE FROM entries WHERE id = $1", id); err != nil {
 		return err
 	}
@@ -375,4 +394,51 @@ func undoHandler(r *request) error {
 		what = fmt.Sprintf("назначение %d отжиманий %s", amount, mention(userID))
 	}
 	return r.reply(fmt.Sprintf("↩️ %s отменил %s.", r.userMention(), what))
+}
+
+func shopItemOpt() *discordgo.ApplicationCommandOption {
+	opt := strOpt("item", "Что купить", true)
+	for _, it := range economy.Items {
+		opt.Choices = append(opt.Choices, &discordgo.ApplicationCommandOptionChoice{
+			Name: fmt.Sprintf("%s — %s", it.Title, economy.Points(it.Price)), Value: it.Key,
+		})
+	}
+	return opt
+}
+
+func shopHandler(r *request) error {
+	if !r.inGuild() {
+		return r.noGuild()
+	}
+	bal, err := economy.Balance(r.guildID(), r.userID())
+	if err != nil {
+		return err
+	}
+	lines := make([]string, 0, len(economy.Items))
+	for _, it := range economy.Items {
+		lines = append(lines, fmt.Sprintf("**%s** — %s", it.Title, economy.Points(it.Price)))
+	}
+	return r.replyEmbed(&discordgo.MessageEmbed{
+		Title: "🛒 Магазин", Color: colorGold, Description: strings.Join(lines, "\n"),
+		Fields: []*discordgo.MessageEmbedField{field("Твой баланс", economy.Points(bal), false)},
+		Footer: footer("1 сделанное отжимание = 1 поинт. Купить — /buy, товар выдаёт админ"),
+	}, true)
+}
+
+func buyHandler(r *request) error {
+	if !r.inGuild() {
+		return r.noGuild()
+	}
+	item, ok := economy.FindItem(r.stringOption("item"))
+	if !ok {
+		return r.replyHidden("Такого товара нет.")
+	}
+	orderID, bal, err := economy.Buy(r.guildID(), r.userID(), item)
+	if errors.Is(err, economy.ErrNotEnough) {
+		return r.replyHidden(fmt.Sprintf("Не хватает: «%s» стоит %s, у тебя %s.", item.Title, economy.Points(item.Price), economy.Points(bal)))
+	}
+	if err != nil {
+		return err
+	}
+	return r.reply(economy.OrderText(r.userID(), orderID, item, bal))
 }

@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS dota_matches (          -- уже обработан�
 
 -- соло-игры в Dota: NULL — выключены, иначе момент включения
 ALTER TABLE dota_links ADD COLUMN IF NOT EXISTS solo_since TIMESTAMPTZ;
--- false — матч засчитан как соло (для отчётов; в ролях учитывается как обычный)
+-- false — матч засчитан как соло (для отчётов; в наградах учитывается как обычный)
 ALTER TABLE dota_matches ADD COLUMN IF NOT EXISTS is_party BOOLEAN NOT NULL DEFAULT true;
 
 CREATE TABLE IF NOT EXISTS pubg_links (
@@ -161,7 +161,12 @@ CREATE TABLE IF NOT EXISTS role_holders (          -- кому бот выдал
     PRIMARY KEY (guild_id, role_key, user_id)
 );
 
-DROP TABLE IF EXISTS award_runs;                -- ежемесячные награды убраны
+CREATE TABLE IF NOT EXISTS award_runs (
+    guild_id BIGINT      NOT NULL,
+    period   TEXT        NOT NULL,                -- месяц итогов, например 2026-11
+    run_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, period)
+);
 
 CREATE TABLE IF NOT EXISTS casino_bets (
     id         TEXT          PRIMARY KEY,
@@ -174,6 +179,34 @@ CREATE TABLE IF NOT EXISTS casino_bets (
     result     JSONB         NOT NULL,
     created_at TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
+
+-- кошелёк поинтов: ставки, выигрыши, покупки (сделанные отжимания и стартовый бонус считаются отдельно)
+CREATE TABLE IF NOT EXISTS wallet (
+    id         BIGSERIAL   PRIMARY KEY,
+    guild_id   BIGINT      NOT NULL,
+    user_id    BIGINT      NOT NULL,
+    amount     INTEGER     NOT NULL,              -- плюс — начисление, минус — списание
+    ref        TEXT        NOT NULL UNIQUE,       -- защита от двойной записи: stake:<ставка>, win:<ставка>, order:...
+    bet_id     TEXT,                              -- ставка казино, если движение из-за неё
+    reason     TEXT        NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet (guild_id, user_id);
+
+CREATE TABLE IF NOT EXISTS shop_orders (
+    id         BIGSERIAL   PRIMARY KEY,
+    guild_id   BIGINT      NOT NULL,
+    user_id    BIGINT      NOT NULL,
+    item       TEXT        NOT NULL,
+    price      INTEGER     NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- старое казино (ночь на 10 ноября 2026) записывало выигрыш как сделанные отжимания: оставляем только ставку
+UPDATE entries
+SET amount = substring(reason FROM '🎰 лудомания: ([0-9]+) ×')::int,
+    reason = '🎰 лудомания: ' || substring(reason FROM '🎰 лудомания: ([0-9]+) ×') || ' (выигрыш убран) · ' || substring(reason FROM ' · (.*)$')
+WHERE kind = 'done' AND reason ~ '^🎰 лудомания: [0-9]+ × [0-9.]+ · ';
 `
 
 // Querier — общее у пула и транзакции (в тестах всё идёт внутри откатываемой транзакции).

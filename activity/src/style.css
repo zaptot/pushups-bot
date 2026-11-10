@@ -354,3 +354,30 @@ button:disabled {
   margin: 0 auto;
   border-radius: 12px;
 }
+
+.balance {
+  margin-left: 10px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.shop {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(100%, 560px);
+}
+
+.shop-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.shop-title {
+  font-weight: 600;
+}
