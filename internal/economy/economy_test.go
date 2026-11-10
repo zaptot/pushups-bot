@@ -70,6 +70,24 @@ func TestWallet(t *testing.T) {
 	if b := balanceOf(t, 7); b != 30 {
 		t.Fatalf("после ставки %d, ждали 30", b)
 	}
+	// уже записанное списание не участвует в проверке баланса: повтор не упирается в «не хватает»
+	if bal, err := Apply(1, 7, nil, Move{Amount: -1000, Ref: "stake:b1", BetID: "b1", Reason: "ставка"}); err != nil || bal != 30 {
+		t.Fatalf("повтор записанного списания: %d %v", bal, err)
+	}
+	// конфликт вставки откатывает и движения
+	conflict := errors.New("уже есть")
+	mustExec(t, `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result) VALUES ('b0', 1, 7, 'roulette', 10, 0, 0, '{}')`)
+	_, err = ApplyInsert(1, 7, Insert{
+		SQL:      `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result) VALUES ($1, 1, 7, 'roulette', 10, 2, 20, $2::jsonb) ON CONFLICT (id) DO NOTHING`,
+		Args:     []any{"b0", `{"x": 1}`},
+		Conflict: conflict,
+	}, Move{Amount: 5, Ref: "win:b0", BetID: "b0", Reason: "выигрыш"})
+	if !errors.Is(err, conflict) {
+		t.Fatalf("конфликт вставки: %v", err)
+	}
+	if b := balanceOf(t, 7); b != 30 {
+		t.Fatalf("после конфликта %d, ждали 30", b)
+	}
 	// ставка без итога возвращается при перезапуске, с итогом — нет
 	mustExec(t, `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result) VALUES ('b2', 1, 7, 'rocket', 10, 0, 0, '{}')`)
 	if _, err := Apply(1, 7, nil, Move{Amount: -10, Ref: "stake:b2", BetID: "b2", Reason: "ставка"}); err != nil {

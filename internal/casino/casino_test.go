@@ -418,7 +418,11 @@ func TestCasinoRocket(t *testing.T) {
 func TestCasinoCitizensOnly(t *testing.T) {
 	storetest.Begin(t)
 	isCitizen = citizenInDB
-	t.Cleanup(func() { isCitizen = func(player) (bool, error) { return true, nil } })
+	forgetCitizens()
+	t.Cleanup(func() {
+		isCitizen = func(player) (bool, error) { return true, nil }
+		forgetCitizens()
+	})
 	cfg.GuildID, cfg.ActivityDir = testGuild, ""
 	cfg.ActivityDevUserID = 601
 	t.Cleanup(func() { cfg.ActivityDevUserID = 0 })
@@ -439,8 +443,20 @@ func TestCasinoCitizensOnly(t *testing.T) {
 	if code != http.StatusOK || out["citizen"] != true || out["token"] == nil {
 		t.Fatalf("гражданин: %d %v", code, out)
 	}
-	if code, out := casinoCall(t, mux, "POST", "/api/roulette", out["token"].(string), body); code != http.StatusOK {
+	token := out["token"].(string)
+	if code, out := casinoCall(t, mux, "POST", "/api/roulette", token, body); code != http.StatusOK {
 		t.Fatalf("ставка гражданина: %d %v", code, out)
+	}
+	// подтверждённое гражданство помнится citizenTTL, без запроса в базу на каждую кнопку
+	if err := store.Exec("DELETE FROM citizens WHERE guild_id = 1 AND user_id = 601"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := casinoCall(t, mux, "GET", "/api/balance", token, nil); code != http.StatusOK {
+		t.Fatalf("гражданство из кэша: ждали 200, получили %d", code)
+	}
+	forgetCitizens() // как будто citizenTTL прошёл
+	if code, _ := casinoCall(t, mux, "GET", "/api/balance", token, nil); code != http.StatusForbidden {
+		t.Fatalf("отнятое гражданство: ждали 403, получили %d", code)
 	}
 }
 
@@ -470,6 +486,16 @@ func TestCasinoReplay(t *testing.T) {
 	if n := count(t, "SELECT count(*) FROM casino_bets WHERE id = 'replay-1'"); n != 1 {
 		t.Fatalf("записей в casino_bets %d, ждали 1", n)
 	}
+	// повтор сразу после ставки упирается в ограничение частоты — и всё равно получает сохранённый итог
+	betInterval = time.Hour
+	if code, out := casinoCall(t, mux, "POST", "/api/roulette", token, body); code != http.StatusOK || out["number"] != first["number"] {
+		t.Fatalf("быстрый повтор: %d %v", code, out)
+	}
+	fresh := map[string]any{"id": "replay-fast", "stake": 20, "bet": map[string]any{"kind": "red"}}
+	if code, _ := casinoCall(t, mux, "POST", "/api/roulette", token, fresh); code != http.StatusTooManyRequests {
+		t.Fatalf("новая ставка сразу: ждали 429, получили %d", code)
+	}
+	betInterval = 0
 	_, bal := casinoCall(t, mux, "GET", "/api/balance", token, nil)
 	if want := float64(economy.StartBonus - 20 + int(first["payout"].(float64))); bal["balance"] != want {
 		t.Fatalf("баланс %v, ждали %v", bal["balance"], want)

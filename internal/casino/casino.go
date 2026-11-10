@@ -1,14 +1,11 @@
 package casino
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
-
-	"github.com/jackc/pgx/v5"
 
 	"pushups-bot/internal/economy"
 	"pushups-bot/internal/store"
@@ -86,15 +83,13 @@ func settle(b bet, debit bool) (json.RawMessage, error) {
 		moves = append(moves, stakeMove(b.ID, "stake", b.Stake))
 	}
 	moves = append(moves, economy.Move{Amount: b.Payout, Ref: "win:" + b.ID, BetID: b.ID, Reason: "выигрыш в казино"})
-	_, err = economy.Apply(b.GuildID, b.UserID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
-			b.ID, b.GuildID, b.UserID, b.Game, b.Stake, b.Multiplier, b.Payout, result)
-		if err == nil && tag.RowsAffected() == 0 {
-			err = errSettled
-		}
-		return err
+	_, err = economy.ApplyInsert(b.GuildID, b.UserID, economy.Insert{
+		SQL: `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) ON CONFLICT (id) DO NOTHING`,
+		Args:     []any{b.ID, b.GuildID, b.UserID, b.Game, b.Stake, b.Multiplier, b.Payout, string(result)},
+		Conflict: errSettled,
 	}, moves...)
+	// ставка с этим id уже записана (повтор запроса): отдаём сохранённый итог, ничего не списав
 	if errors.Is(err, errSettled) {
 		stored, _, err := replay(b.ID, b.UserID)
 		return stored, err
