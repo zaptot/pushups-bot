@@ -2,7 +2,7 @@ import { points, refreshBalance } from './wallet';
 import { request, type RocketPoll, type RocketResult, type RocketStart } from './api';
 import { el, errorText, hiDpiCanvas, stakeError, stakeField, type Cleanup } from './dom';
 
-type Phase = 'idle' | 'flying' | 'won' | 'crashed';
+type Phase = 'idle' | 'flying' | 'crashed';
 
 const width = 360;
 const height = 300;
@@ -10,6 +10,7 @@ const pad = 28;
 const samples = 80;
 const autoMin = 1.01;
 const autoMax = 99.99;
+const tailMaxSeconds = 4;
 const colors = {
   axis: '#3f4147',
   line: '#facc15',
@@ -77,12 +78,56 @@ function drawRocket(ctx: CanvasRenderingContext2D, px: number, py: number, headi
   ctx.restore();
 }
 
-function draw(ctx: CanvasRenderingContext2D, growth: number, seconds: number, phase: Phase, shown: number): void {
+interface Scale {
+  x: (s: number) => number;
+  y: (m: number) => number;
+}
+
+function curve(ctx: CanvasRenderingContext2D, scale: Scale, growth: number, from: number, to: number, color: string): void {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  for (let i = 0; i <= samples; i++) {
+    const s = from + ((to - from) * i) / samples;
+    const px = scale.x(s);
+    const py = scale.y(Math.exp(growth * s));
+    if (i === 0) {
+      ctx.moveTo(px, py);
+    } else {
+      ctx.lineTo(px, py);
+    }
+  }
+  ctx.stroke();
+}
+
+function cashMark(ctx: CanvasRenderingContext2D, px: number, py: number, cashedAt: number): void {
+  ctx.fillStyle = colors.won;
+  ctx.beginPath();
+  ctx.arc(px, py, 6, 0, Math.PI * 2);
+  ctx.fill();
+  const label = `x${cashedAt.toFixed(2)}`;
+  ctx.font = 'bold 15px system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(label, Math.min(px + 8, width - pad - ctx.measureText(label).width), Math.min(py + 8, height - pad - 18));
+}
+
+function draw(
+  ctx: CanvasRenderingContext2D,
+  growth: number,
+  seconds: number,
+  phase: Phase,
+  shown: number,
+  cashedAt = 0,
+): void {
   ctx.clearRect(0, 0, width, height);
   const xMax = Math.max(8, seconds * 1.15);
   const yMax = Math.max(2, Math.exp(growth * seconds) * 1.15);
-  const x = (s: number): number => pad + (s / xMax) * (width - 2 * pad);
-  const y = (m: number): number => height - pad - ((m - 1) / (yMax - 1)) * (height - 2 * pad);
+  const scale: Scale = {
+    x: (s) => pad + (s / xMax) * (width - 2 * pad),
+    y: (m) => height - pad - ((m - 1) / (yMax - 1)) * (height - 2 * pad),
+  };
+  const { x, y } = scale;
 
   ctx.strokeStyle = colors.axis;
   ctx.lineWidth = 1;
@@ -92,21 +137,13 @@ function draw(ctx: CanvasRenderingContext2D, growth: number, seconds: number, ph
   ctx.lineTo(width - pad, height - pad);
   ctx.stroke();
 
-  const accent = phase === 'crashed' ? colors.crashed : phase === 'won' ? colors.won : colors.line;
-  ctx.strokeStyle = accent;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  for (let i = 0; i <= samples; i++) {
-    const s = (seconds * i) / samples;
-    const px = x(s);
-    const py = y(Math.exp(growth * s));
-    if (i === 0) {
-      ctx.moveTo(px, py);
-    } else {
-      ctx.lineTo(px, py);
-    }
+  const accent = phase === 'crashed' ? colors.crashed : colors.line;
+  const cashSeconds = cashedAt > 0 ? Math.min(seconds, secondsTo(growth, cashedAt)) : 0;
+  curve(ctx, scale, growth, 0, cashSeconds, colors.won);
+  curve(ctx, scale, growth, cashSeconds, seconds, accent);
+  if (cashedAt > 0) {
+    cashMark(ctx, x(cashSeconds), y(cashedAt), cashedAt);
   }
-  ctx.stroke();
 
   if (phase !== 'idle') {
     const m = Math.exp(growth * seconds);
@@ -163,14 +200,34 @@ export function mountRocket(root: HTMLElement): Cleanup {
     return Number.isFinite(n) && n >= autoMin && n <= autoMax ? n : null;
   };
 
+  const flyOn = (growth: number, cashedAt: number, crash: number): void => {
+    const from = secondsTo(growth, cashedAt);
+    const end = secondsTo(growth, crash);
+    const speed = Math.max(1, (end - from) / tailMaxSeconds);
+    const t0 = performance.now();
+    const step = (now: number): void => {
+      const seconds = Math.min(end, from + (Math.max(0, now - t0) / 1000) * speed);
+      if (seconds >= end) {
+        draw(ctx, growth, end, 'crashed', crash, cashedAt);
+        return;
+      }
+      draw(ctx, growth, seconds, 'flying', multiplierAt(growth, seconds), cashedAt);
+      frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+  };
+
   const finish = (id: string, res: RocketResult): void => {
     if (disposed || settled || !round || round.id !== id) {
       return;
     }
     settled = true;
     cancelAnimationFrame(frame);
-    const end = res.status === 'won' ? res.multiplier : res.crash;
-    draw(ctx, round.growth, secondsTo(round.growth, end), res.status, end);
+    if (res.status === 'won') {
+      flyOn(round.growth, res.multiplier, res.crash);
+    } else {
+      draw(ctx, round.growth, secondsTo(round.growth, res.crash), 'crashed', res.crash);
+    }
     status.textContent = verdict(res);
     console.log({ rocket: res });
     void refreshBalance();
@@ -237,6 +294,7 @@ export function mountRocket(root: HTMLElement): Cleanup {
       button.textContent = 'Забрать';
       button.disabled = false;
       status.textContent = autoValue ? `Летим, автовывод на x${autoValue.toFixed(2)}` : 'Летим!';
+      cancelAnimationFrame(frame);
       frame = requestAnimationFrame(fly);
       watch(started.id).catch((e: unknown) => fail(started.id, e));
     } catch (e) {
