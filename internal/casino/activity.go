@@ -52,6 +52,42 @@ var isCitizen = func(p player) (bool, error) {
 	return store.FetchOne("SELECT 1 FROM citizens WHERE guild_id = $1 AND user_id = $2", []any{p.GuildID, p.UserID}, &one)
 }
 
+// citizenTTL — сколько помнить подтверждённое гражданство. Запрос в базу на каждую кнопку — заметная
+// задержка, а отнятое гражданство перестаёт пускать в казино не позже чем через это время.
+// Отказ не запоминается: только что принятый гражданин может играть сразу.
+const citizenTTL = 30 * time.Second
+
+var (
+	citizensMu   sync.Mutex
+	citizensSeen = map[[2]int64]time.Time{}
+)
+
+func citizenCached(p player) (bool, error) {
+	key := playerKey(p)
+	now := time.Now()
+	citizensMu.Lock()
+	seen, ok := citizensSeen[key]
+	citizensMu.Unlock()
+	if ok && now.Sub(seen) < citizenTTL {
+		return true, nil
+	}
+	citizen, err := isCitizen(p)
+	citizensMu.Lock()
+	defer citizensMu.Unlock()
+	if citizen && err == nil {
+		citizensSeen[key] = now
+	} else {
+		delete(citizensSeen, key)
+	}
+	return citizen, err
+}
+
+func forgetCitizens() {
+	citizensMu.Lock()
+	clear(citizensSeen)
+	citizensMu.Unlock()
+}
+
 func activityMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/config", handleConfig)
@@ -100,11 +136,28 @@ func Serve(s *discordgo.Session) {
 	} else if n > 0 {
 		log.Printf("Казино: возвращено незавершённых ставок: %d", n)
 	}
+	logDBLatency()
 	srv := &http.Server{Addr: ":" + cfg.ActivityPort, Handler: allowDiscordFrame(activityMux()), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("Казино: порт %s, режим разработки %v", cfg.ActivityPort, cfg.ActivityDevUserID != 0)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Printf("Казино остановлено: %v", err)
 	}
+}
+
+// logDBLatency пишет в лог время обмена с базой: ставка — около четырёх таких обменов,
+// так что по этой цифре видно, сколько задержки добавляет расстояние до Supabase.
+func logDBLatency() {
+	best := time.Duration(0)
+	for range 3 {
+		start := time.Now()
+		if err := store.Exec("SELECT 1"); err != nil {
+			return
+		}
+		if d := time.Since(start); best == 0 || d < best {
+			best = d
+		}
+	}
+	log.Printf("Казино: обмен с базой занимает %v", best.Round(time.Millisecond))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -163,7 +216,7 @@ func auth(h playerHandler) http.HandlerFunc {
 			return
 		}
 		// гражданство проверяется на каждый запрос: его могут отнять, пока казино открыто
-		if citizen, err := isCitizen(p); err != nil {
+		if citizen, err := citizenCached(p); err != nil {
 			log.Printf("Казино: не удалось проверить гражданство: %v", err)
 			writeError(w, http.StatusInternalServerError, "Ошибка базы, попробуй ещё раз")
 			return
@@ -175,12 +228,34 @@ func auth(h playerHandler) http.HandlerFunc {
 	}
 }
 
+const tooFastText = "Слишком часто, подожди секунду"
+
 func tooFast(w http.ResponseWriter, p player) bool {
+	if limited(p) {
+		writeError(w, http.StatusTooManyRequests, tooFastText)
+		return true
+	}
+	return false
+}
+
+// tooFastBet — tooFast для ставок с id от клиента. Повтор ставки (ответ потерялся, клиент прислал
+// тот же id) обычно приходит сразу, поэтому при отказе сначала ищем сохранённый итог. В обычном
+// случае базу заранее не спрашиваем: повтор поймает settle по конфликту id.
+func tooFastBet(w http.ResponseWriter, id string, p player) bool {
+	if !limited(p) {
+		return false
+	}
+	if !replayed(w, id, p) {
+		writeError(w, http.StatusTooManyRequests, tooFastText)
+	}
+	return true
+}
+
+func limited(p player) bool {
 	now := time.Now()
 	lastBetMu.Lock()
 	defer lastBetMu.Unlock()
 	if now.Sub(lastBet[playerKey(p)]) < betInterval {
-		writeError(w, http.StatusTooManyRequests, "Слишком часто, подожди секунду")
 		return true
 	}
 	for k, t := range lastBet {
@@ -303,16 +378,17 @@ func discordPlayer(code, guild string) (player, int, error) {
 	return player{UserID: shared.ParseID(user.ID), GuildID: guildID, Name: shared.OrEmpty(shared.DisplayName(m, m.User), user.ID)}, 0, nil
 }
 
-func replayed(w http.ResponseWriter, id string, p player) bool {
+func badBetID(w http.ResponseWriter, id string) bool {
 	if id == "" || len(id) > betIDMax {
 		writeError(w, http.StatusUnprocessableEntity, "Неверный id ставки")
 		return true
 	}
+	return false
+}
+
+// replayed отвечает сохранённым итогом, если ставка с этим id уже есть (или с ней что-то не так).
+func replayed(w http.ResponseWriter, id string, p player) bool {
 	raw, found, err := replay(id, p.UserID)
-	if errors.Is(err, errBetOwner) {
-		writeError(w, http.StatusConflict, "Эта ставка уже занята")
-		return true
-	}
 	if err != nil || found {
 		respondBet(w, raw, err, p)
 		return true
@@ -323,6 +399,10 @@ func replayed(w http.ResponseWriter, id string, p player) bool {
 func respondBet(w http.ResponseWriter, raw json.RawMessage, err error, p player) {
 	if errors.Is(err, economy.ErrNotEnough) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if errors.Is(err, errBetOwner) {
+		writeError(w, http.StatusConflict, "Эта ставка уже занята")
 		return
 	}
 	if err != nil {

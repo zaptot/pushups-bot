@@ -81,7 +81,7 @@ func handlePlinkoTables(w http.ResponseWriter, _ *http.Request, _ player) {
 
 func handlePlinko(w http.ResponseWriter, r *http.Request, p player) {
 	var req plinkoRequest
-	if !readJSON(w, r, &req) || replayed(w, req.ID, p) {
+	if !readJSON(w, r, &req) || badBetID(w, req.ID) {
 		return
 	}
 	if err := validStake(req.Stake); err != nil {
@@ -93,7 +93,7 @@ func handlePlinko(w http.ResponseWriter, r *http.Request, p player) {
 		writeError(w, http.StatusUnprocessableEntity, "Неверные ряды или риск")
 		return
 	}
-	if tooFast(w, p) {
+	if tooFastBet(w, req.ID, p) {
 		return
 	}
 	path, slot := plinkoDrop(req.Rows)

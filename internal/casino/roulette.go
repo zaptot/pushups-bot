@@ -65,7 +65,7 @@ func rouletteMultiplier(kind string, value, n int) (float64, error) {
 
 func handleRoulette(w http.ResponseWriter, r *http.Request, p player) {
 	var req rouletteRequest
-	if !readJSON(w, r, &req) || replayed(w, req.ID, p) {
+	if !readJSON(w, r, &req) || badBetID(w, req.ID) {
 		return
 	}
 	if err := validStake(req.Stake); err != nil {
@@ -78,7 +78,7 @@ func handleRoulette(w http.ResponseWriter, r *http.Request, p player) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	if tooFast(w, p) {
+	if tooFastBet(w, req.ID, p) {
 		return
 	}
 	payout := roundPayout(req.Stake, mult)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"pushups-bot/internal/store"
 )
@@ -68,10 +69,30 @@ type Move struct {
 	Reason string
 }
 
+// Insert — запись, которая идёт в одной транзакции с движениями (например, итог ставки).
+// Если строка не вставилась (ON CONFLICT DO NOTHING), Apply откатывает всё и возвращает Conflict.
+type Insert struct {
+	SQL      string
+	Args     []any
+	Conflict error
+}
+
 // Apply в одной транзакции (с блокировкой кошелька участника) проверяет, что после списаний баланс
-// не уйдёт в минус, вызывает before (например, запись ставки) и записывает движения.
+// не уйдёт в минус, вызывает before (например, создание заказа) и записывает движения.
 // Возвращает баланс после операции.
 func Apply(guildID, userID int64, before func(ctx context.Context, tx pgx.Tx) error, moves ...Move) (int, error) {
+	return apply(guildID, userID, before, nil, moves)
+}
+
+// ApplyInsert — как Apply, но вместо before одна вставка, которая уходит в базу одной пачкой с движениями.
+func ApplyInsert(guildID, userID int64, ins Insert, moves ...Move) (int, error) {
+	return apply(guildID, userID, nil, &ins, moves)
+}
+
+// apply обходится четырьмя обменами с базой: BEGIN, пачка «блокировка + баланс + уже записанные
+// движения», пачка вставок, COMMIT. Каждый обмен с Supabase — десятки миллисекунд, поэтому запросы
+// не идут по одному.
+func apply(guildID, userID int64, before func(ctx context.Context, tx pgx.Tx) error, ins *Insert, moves []Move) (int, error) {
 	ctx, cancel := store.Ctx()
 	defer cancel()
 	tx, err := store.DB.Begin(ctx)
@@ -79,16 +100,34 @@ func Apply(guildID, userID int64, before func(ctx context.Context, tx pgx.Tx) er
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", userID); err != nil {
+
+	refs := make([]string, 0, len(moves))
+	for _, m := range moves {
+		refs = append(refs, m.Ref)
+	}
+	var bal int
+	done := map[string]bool{}
+	read := &pgx.Batch{}
+	read.Queue("SELECT pg_advisory_xact_lock($1)", userID).Exec(func(pgconn.CommandTag) error { return nil })
+	read.Queue(balanceSQL, guildID, userID, StartBonus, Start).QueryRow(func(row pgx.Row) error { return row.Scan(&bal) })
+	read.Queue("SELECT ref FROM wallet WHERE ref = ANY($1)", refs).Query(func(rows pgx.Rows) error {
+		for rows.Next() {
+			var ref string
+			if err := rows.Scan(&ref); err != nil {
+				return err
+			}
+			done[ref] = true
+		}
+		return rows.Err()
+	})
+	if err := tx.SendBatch(ctx, read).Close(); err != nil {
 		return 0, err
 	}
-	bal, err := balance(ctx, tx, guildID, userID)
-	if err != nil {
-		return 0, err
-	}
+
+	// уже записанное движение (повтор запроса) второй раз не спишется — и в проверке баланса не участвует
 	spend := 0
 	for _, m := range moves {
-		if m.Amount < 0 {
+		if m.Amount < 0 && !done[m.Ref] {
 			spend -= m.Amount
 		}
 	}
@@ -100,6 +139,16 @@ func Apply(guildID, userID int64, before func(ctx context.Context, tx pgx.Tx) er
 			return bal, err
 		}
 	}
+
+	write := &pgx.Batch{}
+	if ins != nil {
+		write.Queue(ins.SQL, ins.Args...).Exec(func(tag pgconn.CommandTag) error {
+			if tag.RowsAffected() == 0 {
+				return ins.Conflict
+			}
+			return nil
+		})
+	}
 	for _, m := range moves {
 		if m.Amount == 0 {
 			continue
@@ -108,13 +157,18 @@ func Apply(guildID, userID int64, before func(ctx context.Context, tx pgx.Tx) er
 		if m.BetID != "" {
 			betID = &m.BetID
 		}
-		tag, err := tx.Exec(ctx, `INSERT INTO wallet (guild_id, user_id, amount, ref, bet_id, reason)
-			VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (ref) DO NOTHING`, guildID, userID, m.Amount, m.Ref, betID, m.Reason)
-		if err != nil {
+		write.Queue(`INSERT INTO wallet (guild_id, user_id, amount, ref, bet_id, reason)
+			VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (ref) DO NOTHING`, guildID, userID, m.Amount, m.Ref, betID, m.Reason).
+			Exec(func(tag pgconn.CommandTag) error {
+				if tag.RowsAffected() == 1 {
+					bal += m.Amount
+				}
+				return nil
+			})
+	}
+	if write.Len() > 0 {
+		if err := tx.SendBatch(ctx, write).Close(); err != nil {
 			return bal, err
-		}
-		if tag.RowsAffected() == 1 {
-			bal += m.Amount
 		}
 	}
 	return bal, tx.Commit(ctx)

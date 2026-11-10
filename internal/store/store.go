@@ -238,7 +238,9 @@ func Connect(url string) (*pgxpool.Pool, error) {
 	conf.MaxConnIdleTime = 5 * time.Minute
 	conf.MaxConnLifetime = 30 * time.Minute
 	conf.HealthCheckPeriod = time.Minute
-	conf.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeDescribeExec // без кэша: работаем через пулер Supabase
+	// Exec: запрос с параметрами — один обмен с базой (DescribeExec делал два), без кэша подготовленных
+	// запросов, так что пулер Supabase не мешает. Типы параметров берутся из типов Go: JSON передавать строкой.
+	conf.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	pool, err := pgxpool.NewWithConfig(ctx, conf)
