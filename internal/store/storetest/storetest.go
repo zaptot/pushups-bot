@@ -9,6 +9,9 @@ import (
 	"pushups-bot/internal/store"
 )
 
+// schemaLock — ключ advisory-лока для тестов; не пересекается с id пользователей из economy.Apply.
+const schemaLock int64 = -7_301_000_001
+
 // Begin подключается к базе из DATABASE_URL (или пропускает тест, если её нет), открывает транзакцию,
 // создаёт схему и подменяет store.DB на эту транзакцию до конца теста.
 func Begin(t testing.TB) {
@@ -33,6 +36,12 @@ func Begin(t testing.TB) {
 		tx.Rollback(ctx)
 		pool.Close()
 	})
+	// go test запускает пакеты параллельно, и все они ходят в одну базу. ALTER TABLE из схемы держит
+	// эксклюзивные блокировки до отката, и транзакции разных пакетов ловили deadlock (40P01).
+	// Общий advisory-лок до конца транзакции выстраивает тесты с базой в очередь.
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", schemaLock); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := tx.Exec(ctx, store.Schema); err != nil {
 		t.Fatal(err)
 	}
