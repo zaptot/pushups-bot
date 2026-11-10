@@ -1,4 +1,4 @@
-package main
+package bot
 
 import (
 	"context"
@@ -16,6 +16,9 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/jackc/pgx/v5"
+
+	"pushups-bot/internal/shared"
+	"pushups-bot/internal/store"
 )
 
 var (
@@ -142,7 +145,7 @@ func processNewPubgMatches(guildID int64) (results []pubgResult, failed []int64,
 		sql += " WHERE guild_id = $1"
 		args = append(args, guildID)
 	}
-	links, err := fetch[pubgLink](sql, args...)
+	links, err := store.Fetch[pubgLink](sql, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -186,7 +189,7 @@ func processNewPubgMatches(guildID int64) (results []pubgResult, failed []int64,
 		for g := range guilds {
 			ids = append(ids, g)
 		}
-		checked, err := column[int64]("SELECT guild_id FROM pubg_checked WHERE match_id = $1 AND guild_id = ANY($2::bigint[])", matchID, ids)
+		checked, err := store.Column[int64]("SELECT guild_id FROM pubg_checked WHERE match_id = $1 AND guild_id = ANY($2::bigint[])", matchID, ids)
 		if err != nil {
 			return results, failed, err
 		}
@@ -245,7 +248,7 @@ func processNewPubgMatches(guildID int64) (results []pubgResult, failed []int64,
 					}
 				}
 			}
-			if err := exec("INSERT INTO pubg_checked (guild_id, match_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", gid, matchID); err != nil {
+			if err := store.Exec("INSERT INTO pubg_checked (guild_id, match_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", gid, matchID); err != nil {
 				return results, failed, err
 			}
 		}
@@ -257,9 +260,9 @@ func processNewPubgMatches(guildID int64) (results []pubgResult, failed []int64,
 func savePubgMatch(guildID int64, matchID, mode string, playedAt time.Time, m pubgMember) (*pubgResult, error) {
 	points, pushups := pubgScore(m.stats.Kills, m.stats.Assists, m.stats.Damage)
 	damage := int(math.RoundToEven(m.stats.Damage))
-	ctx, cancel := dbCtx()
+	ctx, cancel := store.Ctx()
 	defer cancel()
-	tx, err := db.Begin(ctx)
+	tx, err := store.DB.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +287,7 @@ func savePubgMatch(guildID int64, matchID, mode string, playedAt time.Time, m pu
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return &pubgResult{guildID, m.link.UserID, m.stats.Kills, m.stats.Assists, damage, points, pushups, orEmpty(mode, "?"), playedAt}, nil
+	return &pubgResult{guildID, m.link.UserID, m.stats.Kills, m.stats.Assists, damage, points, pushups, shared.OrEmpty(mode, "?"), playedAt}, nil
 }
 
 func pubgReportEmbeds(results []pubgResult) []*discordgo.MessageEmbed {
@@ -340,7 +343,7 @@ func linkPubgHandler(r *request) error {
 	player := data.Data[0]
 	var linkedAt time.Time
 	// перепривязка того же аккаунта не сдвигает начало учёта
-	if _, err := fetchOne(`INSERT INTO pubg_links (guild_id, user_id, account_id, name, linked_by) VALUES ($1, $2, $3, $4, $5)
+	if _, err := store.FetchOne(`INSERT INTO pubg_links (guild_id, user_id, account_id, name, linked_by) VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (guild_id, user_id) DO UPDATE SET account_id = EXCLUDED.account_id, name = EXCLUDED.name,
 		linked_by = EXCLUDED.linked_by,
 		linked_at = CASE WHEN pubg_links.account_id = EXCLUDED.account_id THEN pubg_links.linked_at ELSE now() END
@@ -356,7 +359,7 @@ func unlinkPubgHandler(r *request) error {
 	}
 	user := r.userOption("user")
 	var name string
-	found, err := fetchOne("DELETE FROM pubg_links WHERE guild_id = $1 AND user_id = $2 RETURNING name", []any{r.guildID(), user.ID}, &name)
+	found, err := store.FetchOne("DELETE FROM pubg_links WHERE guild_id = $1 AND user_id = $2 RETURNING name", []any{r.guildID(), user.ID}, &name)
 	if err != nil {
 		return err
 	}
@@ -370,7 +373,7 @@ func pubgLinksHandler(r *request) error {
 	if !r.inGuild() {
 		return r.noGuild()
 	}
-	rows, err := fetch[struct {
+	rows, err := store.Fetch[struct {
 		UserID int64
 		Name   string
 	}]("SELECT user_id, name FROM pubg_links WHERE guild_id = $1 ORDER BY linked_at", r.guildID())
@@ -382,7 +385,7 @@ func pubgLinksHandler(r *request) error {
 		lines = append(lines, fmt.Sprintf("%s — **%s**", mention(l.UserID), l.Name))
 	}
 	return r.replyEmbed(&discordgo.MessageEmbed{
-		Title: "🔗 Привязанные PUBG-аккаунты", Description: orEmpty(strings.Join(lines, "\n"), "Пока никого."), Color: colorDarkOrange,
+		Title: "🔗 Привязанные PUBG-аккаунты", Description: shared.OrEmpty(strings.Join(lines, "\n"), "Пока никого."), Color: colorDarkOrange,
 		Footer: footer(fmt.Sprintf("Автопроверка каждые %d мин · только пати-игры", cfg.DotaCheckMinutes)),
 	}, true)
 }

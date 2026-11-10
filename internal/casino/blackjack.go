@@ -1,4 +1,4 @@
-package main
+package casino
 
 import (
 	"encoding/json"
@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"pushups-bot/internal/shared"
 )
 
 const (
@@ -199,7 +201,7 @@ func blackjackStep(h *blackjackHand) (json.RawMessage, error) {
 }
 
 func blackjackTimeout(key [2]int64, id string) {
-	defer protect("автозавершении блэкджека")
+	defer shared.Protect("автозавершении блэкджека")
 	blackjackMu.Lock()
 	defer blackjackMu.Unlock()
 	h := blackjackHands[key]

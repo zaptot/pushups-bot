@@ -1,4 +1,4 @@
-package main
+package casino
 
 import (
 	"encoding/json"
@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+
+	"pushups-bot/internal/store"
 )
 
 const (
-	stakeMin = doneMin
+	stakeMin = 10
 	stakeMax = 10000
 	betIDMax = 64
 )
@@ -45,7 +47,7 @@ func roundPayout(stake int, mult float64) int {
 func replay(id string, userID int64) (json.RawMessage, bool, error) {
 	var owner int64
 	var result []byte
-	found, err := fetchOne(`SELECT user_id, result FROM casino_bets WHERE id = $1`, []any{id}, &owner, &result)
+	found, err := store.FetchOne(`SELECT user_id, result FROM casino_bets WHERE id = $1`, []any{id}, &owner, &result)
 	if err != nil || !found {
 		return nil, false, err
 	}
@@ -60,9 +62,9 @@ func settle(b bet) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := dbCtx()
+	ctx, cancel := store.Ctx()
 	defer cancel()
-	tag, err := db.Exec(ctx, `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result)
+	tag, err := store.DB.Exec(ctx, `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
 		b.ID, b.GuildID, b.UserID, b.Game, b.Stake, b.Multiplier, b.Payout, result)
 	if err != nil {

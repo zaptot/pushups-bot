@@ -1,26 +1,24 @@
-package main
+package bot
 
 // Тесты ходят в настоящую базу из DATABASE_URL, но всё выполняется в транзакции и откатывается.
 // Discord, OpenDota и PUBG подменены, поэтому реальных запросов к ним нет.
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
-	"image/gif"
-	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
+	"pushups-bot/internal/shared"
+	"pushups-bot/internal/store"
+	"pushups-bot/internal/store/storetest"
 )
 
 const (
@@ -68,32 +66,11 @@ func (f *fakeDiscord) text() string {
 
 func setup(t *testing.T) *fakeDiscord {
 	t.Helper()
-	loadConfig()
-	if cfg.DatabaseURL == "" {
-		t.Skip("нет DATABASE_URL")
-	}
-	pool, err := connectDB(cfg.DatabaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		tx.Rollback(ctx)
-		pool.Close()
-	})
-	if _, err := tx.Exec(ctx, schema); err != nil {
-		t.Fatal(err)
-	}
-	db = tx
+	storetest.Begin(t)
 	fake := &fakeDiscord{}
 	session, _ = discordgo.New("Bot test")
 	session.Client = &http.Client{Transport: fake}
 	botUserID = 999
-	wheelSpinTime = 0
 	dotaRequestPause = 0
 	for _, c := range commandList() {
 		handlers[c.def.Name] = c.handler
@@ -103,7 +80,7 @@ func setup(t *testing.T) *fakeDiscord {
 
 func member(id int64) *discordgo.Member {
 	return &discordgo.Member{
-		User: &discordgo.User{ID: idStr(id), Username: "u" + idStr(id)}, Nick: "nick" + idStr(id),
+		User: &discordgo.User{ID: shared.IDStr(id), Username: "u" + shared.IDStr(id)}, Nick: "nick" + shared.IDStr(id),
 		JoinedAt: time.Now().AddDate(0, -1, 0), Permissions: discordgo.PermissionManageGuild,
 	}
 }
@@ -115,7 +92,7 @@ type opt struct {
 }
 
 func user(name string, id int64) opt {
-	return opt{name, discordgo.ApplicationCommandOptionUser, idStr(id)}
+	return opt{name, discordgo.ApplicationCommandOptionUser, shared.IDStr(id)}
 }
 func num(name string, v int) opt {
 	return opt{name, discordgo.ApplicationCommandOptionInteger, float64(v)}
@@ -132,7 +109,7 @@ func run(from int64, name string, opts ...opt) {
 		data.Options = append(data.Options, &discordgo.ApplicationCommandInteractionDataOption{Name: o.name, Type: o.kind, Value: o.value})
 		if o.kind == discordgo.ApplicationCommandOptionUser {
 			id := o.value.(string)
-			m := member(parseID(id))
+			m := member(shared.ParseID(id))
 			data.Resolved.Users[id] = m.User
 			data.Resolved.Members[id] = &discordgo.Member{Nick: m.Nick, JoinedAt: m.JoinedAt}
 		}
@@ -162,15 +139,15 @@ func want(t *testing.T, fake *fakeDiscord, substr string) {
 func count(t *testing.T, sql string, args ...any) int {
 	t.Helper()
 	var n int
-	if _, err := fetchOne(sql, args, &n); err != nil {
+	if _, err := store.FetchOne(sql, args, &n); err != nil {
 		t.Fatal(err)
 	}
 	return n
 }
 
-func entries(t *testing.T, id int64) stat {
+func entries(t *testing.T, id int64) store.Stat {
 	t.Helper()
-	st, err := userStats(testGuildID, id)
+	st, err := store.UserStats(testGuildID, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +156,7 @@ func entries(t *testing.T, id int64) stat {
 
 func mustExec(t *testing.T, sql string, args ...any) {
 	t.Helper()
-	if err := exec(sql, args...); err != nil {
+	if err := store.Exec(sql, args...); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -187,7 +164,7 @@ func mustExec(t *testing.T, sql string, args ...any) {
 func openPollID(t *testing.T, kind string) int64 {
 	t.Helper()
 	var id int64
-	if _, err := fetchOne("SELECT id FROM polls WHERE guild_id = 1 AND kind = $1 AND status IN ('open', 'nominating') ORDER BY id DESC LIMIT 1", []any{kind}, &id); err != nil || id == 0 {
+	if _, err := store.FetchOne("SELECT id FROM polls WHERE guild_id = 1 AND kind = $1 AND status IN ('open', 'nominating') ORDER BY id DESC LIMIT 1", []any{kind}, &id); err != nil || id == 0 {
 		t.Fatalf("нет открытого голосования %s: %v", kind, err)
 	}
 	return id
@@ -239,7 +216,7 @@ func TestPureLogic(t *testing.T) {
 	if ids, v = leaders([]ranked{{1, 30}, {2, 10}, {3, 30}}, false); len(ids) != 1 || ids[0] != 2 || v != 10 {
 		t.Error(ids, v)
 	}
-	if n := len(commandList()); n != 28 {
+	if n := len(commandList()); n != 27 {
 		t.Errorf("команд: %d", n)
 	}
 	for _, c := range commandList() {
@@ -254,60 +231,13 @@ func TestPureLogic(t *testing.T) {
 	}
 }
 
-func TestWheelLandsOnChosenSector(t *testing.T) {
-	isYellow := func(r, g, b uint32) bool { return r>>8 > 210 && g>>8 > 170 && b>>8 < 110 }
-	isRed := func(r, g, b uint32) bool { return r>>8 > 180 && g>>8 < 90 && b>>8 < 90 }
-	dir := os.Getenv("WHEEL_PREVIEW")
-	for _, coef := range wheelMultipliers {
-		for i := range 24 {
-			win := i%2 == 0
-			start, pointer := pickSpin(coef, win)
-			gifData, pngData, err := renderWheel(coef, start, pointer)
-			if err != nil {
-				t.Fatal(err)
-			}
-			img, err := png.Decode(bytes.NewReader(pngData))
-			if err != nil {
-				t.Fatal(err)
-			}
-			yellow, red := 0, 0
-			for d := 30; d < 96; d++ {
-				r, g, b, _ := img.At(wheelSize/2, wheelSize/2-d).RGBA()
-				if isYellow(r, g, b) {
-					yellow++
-				}
-				if isRed(r, g, b) {
-					red++
-				}
-			}
-			if (yellow > red) != win {
-				t.Errorf("x%d win=%v: жёлтых %d, красных %d", coef, win, yellow, red)
-			}
-			if i == 0 {
-				anim, err := gif.DecodeAll(bytes.NewReader(gifData))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if len(anim.Image) != wheelFrames {
-					t.Errorf("кадров %d", len(anim.Image))
-				}
-				if dir != "" {
-					os.WriteFile(filepath.Join(dir, fmt.Sprintf("go_x%d.png", coef)), pngData, 0o644)
-					os.WriteFile(filepath.Join(dir, fmt.Sprintf("go_x%d.gif", coef)), gifData, 0o644)
-				}
-				t.Logf("x%d: gif %d КБ", coef, len(gifData)/1024)
-			}
-		}
-	}
-}
-
 func TestPushupCommands(t *testing.T) {
 	fake := setup(t)
 	run(7, "done", num("amount", 20))
 	want(t, fake, "засчитано **20**")
 	run(7, "owe", user("user", 8), num("amount", 30), str("reason", "спор"))
 	want(t, fake, "назначил")
-	if st := entries(t, 8); st.Owed != 30 || st.remaining() != 30 {
+	if st := entries(t, 8); st.Owed != 30 || st.Remaining() != 30 {
 		t.Fatal(st)
 	}
 	run(8, "status")
@@ -320,34 +250,13 @@ func TestPushupCommands(t *testing.T) {
 	run(7, "history")
 	want(t, fake, "сделал 20")
 
-	run(7, "done_ludoman", num("amount", 20), num("multiplier", 5))
-	text := fake.text()
-	if !strings.Contains(text, "крутит колесо") || !strings.Contains(text, `filename="wheel.gif"`) {
-		t.Fatal(text)
-	}
-	if !strings.Contains(text, "20 × **5** = **100**") && !strings.Contains(text, "20 × **0** = **0**") {
-		t.Fatal(text)
-	}
-	if strings.Contains(text, "wheel.png") {
-		t.Fatal("гифка должна остаться без замены", text)
-	}
-	fake.reset()
-	got := entries(t, 7).Done
-	if got != 20 && got != 120 {
-		t.Fatal(got)
-	}
+	// старые броски /done_ludoman (команды больше нет) по-прежнему нельзя отменить
+	mustExec(t, "INSERT INTO entries (guild_id, user_id, kind, amount, author_id, reason) "+
+		"VALUES (1, 7, 'done', 40, 7, '🎰 лудомания: 20 × 2.00')")
 	run(7, "undo")
 	want(t, fake, "Казино ставок не возвращает")
-
-	balance, err := ludomanBalance(testGuildID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if balance[7] != 80 && balance[7] != -20 {
-		t.Fatal(balance)
-	}
 	run(7, "top", str("board", "done"))
-	want(t, fake, fmt.Sprintf("(%+d)", balance[7]))
+	want(t, fake, "**60**")
 }
 
 func TestCitizenshipAndPolls(t *testing.T) {
@@ -399,7 +308,7 @@ func TestCitizenshipAndPolls(t *testing.T) {
 	want(t, fake, "руинил")
 	court := openPollID(t, "accuse")
 	var lawyer int64
-	fetchOne("SELECT lawyer_id FROM polls WHERE id = $1", []any{court}, &lawyer)
+	store.FetchOne("SELECT lawyer_id FROM polls WHERE id = $1", []any{court}, &lawyer)
 	if lawyer == 1 || lawyer == 2 || lawyer == 0 {
 		t.Fatal("адвокат", lawyer)
 	}
@@ -472,7 +381,7 @@ func TestCitizenshipAndPolls(t *testing.T) {
 	want(t, fake, "ещё не истёк")
 
 	// /vouch за новичка
-	id := idStr(20)
+	id := shared.IDStr(20)
 	m := member(20)
 	onInteraction(session, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
 		ID: "12", AppID: "20", Token: "tok", Type: discordgo.InteractionApplicationCommand, GuildID: testGuild, ChannelID: "777",
@@ -671,12 +580,8 @@ func TestAwards(t *testing.T) {
 
 func TestLiveDataStillReadable(t *testing.T) {
 	setup(t)
-	gid := parseID(cfg.GuildID)
-	stats, err := guildStats(gid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	balance, err := ludomanBalance(gid)
+	gid := shared.ParseID(cfg.GuildID)
+	stats, err := store.GuildStats(gid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,11 +589,11 @@ func TestLiveDataStillReadable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	polls, err := fetch[poll]("SELECT "+pollColumns+" FROM polls WHERE guild_id = $1", gid)
+	polls, err := store.Fetch[poll]("SELECT "+pollColumns+" FROM polls WHERE guild_id = $1", gid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("игроков %d, лудоманов %d, граждан %d, голосований %d", len(stats), len(balance), len(ids), len(polls))
+	t.Logf("игроков %d, граждан %d, голосований %d", len(stats), len(ids), len(polls))
 	if len(stats) == 0 {
 		t.Fatal("настоящие данные не прочитались")
 	}

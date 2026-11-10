@@ -1,4 +1,4 @@
-package main
+package bot
 
 import (
 	"fmt"
@@ -10,22 +10,25 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
+	"pushups-bot/internal/shared"
+	"pushups-bot/internal/store"
 )
 
 // ---------- гражданство: проверки ----------
 
 func citizenIDs(guildID int64) ([]int64, error) {
-	return column[int64]("SELECT user_id FROM citizens WHERE guild_id = $1 ORDER BY joined_at", guildID)
+	return store.Column[int64]("SELECT user_id FROM citizens WHERE guild_id = $1 ORDER BY joined_at", guildID)
 }
 
 func isCitizen(guildID, userID int64) (bool, error) {
 	var one int
-	return fetchOne("SELECT 1 FROM citizens WHERE guild_id = $1 AND user_id = $2", []any{guildID, userID}, &one)
+	return store.FetchOne("SELECT 1 FROM citizens WHERE guild_id = $1 AND user_id = $2", []any{guildID, userID}, &one)
 }
 
 // activeCitizens: граждане без заморозки (долг не больше freezeDebt).
 func activeCitizens(guildID int64) ([]int64, error) {
-	stats, err := guildStats(guildID)
+	stats, err := store.GuildStats(guildID)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +36,7 @@ func activeCitizens(guildID int64) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(ids, func(id int64) bool { return stats[id].remaining() > freezeDebt }), nil
+	return slices.DeleteFunc(ids, func(id int64) bool { return stats[id].Remaining() > freezeDebt }), nil
 }
 
 type president struct {
@@ -43,7 +46,7 @@ type president struct {
 
 func currentPresident(guildID int64) (*president, error) {
 	var p president
-	found, err := fetchOne("SELECT user_id, elected_at FROM presidents WHERE guild_id = $1 ORDER BY elected_at DESC LIMIT 1",
+	found, err := store.FetchOne("SELECT user_id, elected_at FROM presidents WHERE guild_id = $1 ORDER BY elected_at DESC LIMIT 1",
 		[]any{guildID}, &p.UserID, &p.ElectedAt)
 	if !found {
 		return nil, err
@@ -68,12 +71,12 @@ func requireActiveCitizen(r *request) (bool, error) {
 	if !citizen {
 		return false, r.replyHidden("Это могут только граждане.")
 	}
-	st, err := userStats(r.guildID(), r.userID())
+	st, err := store.UserStats(r.guildID(), r.userID())
 	if err != nil {
 		return false, err
 	}
-	if st.remaining() > freezeDebt {
-		return false, r.replyHidden(fmt.Sprintf("❄️ Твои привилегии заморожены: долг **%d** > %d. Отожмись!", st.remaining(), freezeDebt))
+	if st.Remaining() > freezeDebt {
+		return false, r.replyHidden(fmt.Sprintf("❄️ Твои привилегии заморожены: долг **%d** > %d. Отожмись!", st.Remaining(), freezeDebt))
 	}
 	return true, nil
 }
@@ -82,7 +85,7 @@ func requireActiveCitizen(r *request) (bool, error) {
 
 func roleID(guildID int64, key string) (string, bool) {
 	name := roleNames[key]
-	guild, err := session.State.Guild(idStr(guildID))
+	guild, err := session.State.Guild(shared.IDStr(guildID))
 	if err != nil {
 		return "", false
 	}
@@ -94,7 +97,7 @@ func roleID(guildID int64, key string) (string, bool) {
 		}
 	}
 	session.State.RUnlock()
-	role, err := session.GuildRoleCreate(idStr(guildID), &discordgo.RoleParams{Name: name})
+	role, err := session.GuildRoleCreate(shared.IDStr(guildID), &discordgo.RoleParams{Name: name})
 	if err != nil {
 		log.Printf("Не удалось создать роль %s: %v", name, err)
 		return "", false
@@ -105,9 +108,9 @@ func roleID(guildID int64, key string) (string, bool) {
 func changeRole(guildID, userID int64, role string, add bool) bool {
 	var err error
 	if add {
-		err = session.GuildMemberRoleAdd(idStr(guildID), idStr(userID), role)
+		err = session.GuildMemberRoleAdd(shared.IDStr(guildID), shared.IDStr(userID), role)
 	} else {
-		err = session.GuildMemberRoleRemove(idStr(guildID), idStr(userID), role)
+		err = session.GuildMemberRoleRemove(shared.IDStr(guildID), shared.IDStr(userID), role)
 	}
 	if err == nil {
 		return true
@@ -125,7 +128,7 @@ func setRoleHolders(guildID int64, key string, ids []int64) error {
 	if !ok {
 		return nil
 	}
-	old, err := column[int64]("SELECT user_id FROM role_holders WHERE guild_id = $1 AND role_key = $2", guildID, key)
+	old, err := store.Column[int64]("SELECT user_id FROM role_holders WHERE guild_id = $1 AND role_key = $2", guildID, key)
 	if err != nil {
 		return err
 	}
@@ -141,9 +144,9 @@ func setRoleHolders(guildID int64, key string, ids []int64) error {
 			held[id] = true
 		}
 	}
-	ctx, cancel := dbCtx()
+	ctx, cancel := store.Ctx()
 	defer cancel()
-	tx, err := db.Begin(ctx)
+	tx, err := store.DB.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -160,7 +163,7 @@ func setRoleHolders(guildID int64, key string, ids []int64) error {
 }
 
 func marginalIDs(guildID int64) ([]int64, error) {
-	return column[int64]("SELECT user_id FROM marginals WHERE guild_id = $1", guildID)
+	return store.Column[int64]("SELECT user_id FROM marginals WHERE guild_id = $1", guildID)
 }
 
 // syncRoles: Гражданин, Президент, Маргинал — по данным в базе.
@@ -198,7 +201,7 @@ func tryNaturalize(guildID, userID int64) (bool, string, error) {
 	if err != nil || citizen {
 		return false, "", err
 	}
-	vouchers, err := column[int64]("SELECT voucher_id FROM vouches WHERE guild_id = $1 AND candidate_id = $2", guildID, userID)
+	vouchers, err := store.Column[int64]("SELECT voucher_id FROM vouches WHERE guild_id = $1 AND candidate_id = $2", guildID, userID)
 	if err != nil {
 		return false, "", err
 	}
@@ -210,20 +213,20 @@ func tryNaturalize(guildID, userID int64) (bool, string, error) {
 	if len(vouchers) < vouchesNeeded {
 		return false, fmt.Sprintf("Поручителей: %d/%d.", len(vouchers), vouchesNeeded), nil
 	}
-	st, err := userStats(guildID, userID)
+	st, err := store.UserStats(guildID, userID)
 	if err != nil {
 		return false, "", err
 	}
-	if st.remaining() >= citizenMaxDebt {
-		return false, fmt.Sprintf("Поручителей хватает, но долг %d — нужно меньше %d.", st.remaining(), citizenMaxDebt), nil
+	if st.Remaining() >= citizenMaxDebt {
+		return false, fmt.Sprintf("Поручителей хватает, но долг %d — нужно меньше %d.", st.Remaining(), citizenMaxDebt), nil
 	}
 	if st.Done == 0 {
 		return false, "Поручителей хватает, но не сделано ни одного отжимания.", nil
 	}
-	if err := exec("INSERT INTO citizens (guild_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", guildID, userID); err != nil {
+	if err := store.Exec("INSERT INTO citizens (guild_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", guildID, userID); err != nil {
 		return false, "", err
 	}
-	if err := exec("DELETE FROM vouches WHERE guild_id = $1 AND candidate_id = $2", guildID, userID); err != nil {
+	if err := store.Exec("DELETE FROM vouches WHERE guild_id = $1 AND candidate_id = $2", guildID, userID); err != nil {
 		return false, "", err
 	}
 	if err := syncRoles(guildID); err != nil {
@@ -243,7 +246,7 @@ func founderHandler(r *request) error {
 	if err := r.deferReply(); err != nil {
 		return err
 	}
-	if err := exec("INSERT INTO citizens (guild_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", r.guildID(), user.ID); err != nil {
+	if err := store.Exec("INSERT INTO citizens (guild_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", r.guildID(), user.ID); err != nil {
 		return err
 	}
 	if err := syncRoles(r.guildID()); err != nil {
@@ -278,7 +281,7 @@ func vouchHandler(r *request) error {
 	if err := r.deferReply(); err != nil {
 		return err
 	}
-	if err := exec("INSERT INTO vouches (guild_id, candidate_id, voucher_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+	if err := store.Exec("INSERT INTO vouches (guild_id, candidate_id, voucher_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
 		r.guildID(), user.ID, r.userID()); err != nil {
 		return err
 	}
@@ -325,7 +328,7 @@ func citizensHandler(r *request) error {
 		lines = append(lines, line)
 	}
 	return r.replyEmbed(&discordgo.MessageEmbed{
-		Title: fmt.Sprintf("🏛️ Граждане (%d)", len(ids)), Description: orEmpty(strings.Join(lines, "\n"), "Пока никого."), Color: colorBlue,
+		Title: fmt.Sprintf("🏛️ Граждане (%d)", len(ids)), Description: shared.OrEmpty(strings.Join(lines, "\n"), "Пока никого."), Color: colorBlue,
 		Footer: footer("👑 президент · ❄️ заморожен · 🚫 маргинал"),
 	}, true)
 }
@@ -334,7 +337,7 @@ func lawsHandler(r *request) error {
 	if !r.inGuild() {
 		return r.noGuild()
 	}
-	rows, err := fetch[struct {
+	rows, err := store.Fetch[struct {
 		Text      string
 		AdoptedAt time.Time
 	}]("SELECT text, adopted_at FROM laws WHERE guild_id = $1 ORDER BY adopted_at", r.guildID())
@@ -350,7 +353,7 @@ func lawsHandler(r *request) error {
 	}
 	return r.replyEmbed(&discordgo.MessageEmbed{
 		Title: "📜 Законы", Color: colorDarkGold,
-		Description: orEmpty(truncate(strings.Join(laws, "\n"), 4000), "Принятых законов пока нет."),
+		Description: shared.OrEmpty(truncate(strings.Join(laws, "\n"), 4000), "Принятых законов пока нет."),
 		Fields:      []*discordgo.MessageEmbedField{field("Конституция", strings.Join(articles, "\n"), false)},
 	}, false)
 }
@@ -406,7 +409,7 @@ func (p *poll) text() string {
 const pollColumns = "id, guild_id, kind, status, creator_id, target_id, lawyer_id, amount, text, channel_id, message_id, result, ends_at"
 
 func getPoll(id int64) (*poll, error) {
-	rows, err := fetch[poll]("SELECT "+pollColumns+" FROM polls WHERE id = $1", id)
+	rows, err := store.Fetch[poll]("SELECT "+pollColumns+" FROM polls WHERE id = $1", id)
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
@@ -439,12 +442,12 @@ func pollDescription(p *poll) string {
 }
 
 func candidates(pollID int64) ([]int64, error) {
-	return column[int64]("SELECT user_id FROM election_candidates WHERE poll_id = $1", pollID)
+	return store.Column[int64]("SELECT user_id FROM election_candidates WHERE poll_id = $1", pollID)
 }
 
 func pollEmbed(p *poll) (*discordgo.MessageEmbed, error) {
 	embed := &discordgo.MessageEmbed{Title: fmt.Sprintf("%s #%d", kindTitles[p.Kind], p.ID), Description: pollDescription(p), Color: colorPurple}
-	rows, err := fetch[struct {
+	rows, err := store.Fetch[struct {
 		Choice string
 		N      int
 	}]("SELECT choice, COUNT(*)::int FROM poll_votes WHERE poll_id = $1 GROUP BY choice", p.ID)
@@ -465,13 +468,13 @@ func pollEmbed(p *poll) (*discordgo.MessageEmbed, error) {
 			if p.Status == "nominating" {
 				lines = append(lines, mention(c))
 			} else {
-				lines = append(lines, fmt.Sprintf("%s — %d", mention(c), tally[idStr(c)]))
+				lines = append(lines, fmt.Sprintf("%s — %d", mention(c), tally[shared.IDStr(c)]))
 			}
 		}
 		if p.Status == "nominating" {
-			embed.Fields = append(embed.Fields, field("Кандидаты", orEmpty(strings.Join(lines, "\n"), "пока никого"), false))
+			embed.Fields = append(embed.Fields, field("Кандидаты", shared.OrEmpty(strings.Join(lines, "\n"), "пока никого"), false))
 		} else {
-			embed.Fields = append(embed.Fields, field("Голоса", orEmpty(strings.Join(lines, "\n"), "—"), false))
+			embed.Fields = append(embed.Fields, field("Голоса", shared.OrEmpty(strings.Join(lines, "\n"), "—"), false))
 		}
 	} else {
 		embed.Fields = append(embed.Fields, field("✅ За", strconv.Itoa(tally["yes"]), true), field("❌ Против", strconv.Itoa(tally["no"]), true))
@@ -497,13 +500,13 @@ func yesNoComponents(pollID int64) []discordgo.MessageComponent {
 
 func openPollExists(guildID int64, kind string, target *int64) (bool, error) {
 	var one int
-	return fetchOne(`SELECT 1 FROM polls WHERE guild_id = $1 AND kind = $2 AND status IN ('open', 'nominating')
+	return store.FetchOne(`SELECT 1 FROM polls WHERE guild_id = $1 AND kind = $2 AND status IN ('open', 'nominating')
 		AND target_id IS NOT DISTINCT FROM $3::bigint`, []any{guildID, kind, target}, &one)
 }
 
 func createPoll(r *request, kind string, hours int, status string, target, lawyer *int64, amount *int, text *string) error {
 	var pollID int64
-	if _, err := fetchOne(`INSERT INTO polls (guild_id, kind, status, creator_id, target_id, lawyer_id, amount, text, ends_at)
+	if _, err := store.FetchOne(`INSERT INTO polls (guild_id, kind, status, creator_id, target_id, lawyer_id, amount, text, ends_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
 		[]any{r.guildID(), kind, status, r.userID(), target, lawyer, amount, text, time.Now().Add(time.Duration(hours) * time.Hour)}, &pollID); err != nil {
 		return err
@@ -527,7 +530,7 @@ func createPoll(r *request, kind string, hours int, status string, target, lawye
 	if err != nil {
 		return err
 	}
-	return exec("UPDATE polls SET channel_id = $1, message_id = $2 WHERE id = $3", parseID(msg.ChannelID), parseID(msg.ID), pollID)
+	return store.Exec("UPDATE polls SET channel_id = $1, message_id = $2 WHERE id = $3", shared.ParseID(msg.ChannelID), shared.ParseID(msg.ID), pollID)
 }
 
 func handleVote(r *request, pollID int64, choice string) error {
@@ -546,7 +549,7 @@ func handleVote(r *request, pollID int64, choice string) error {
 	}
 	if p.Kind == "election" {
 		var one int
-		ok, err := fetchOne("SELECT 1 FROM election_candidates WHERE poll_id = $1 AND user_id = $2", []any{pollID, parseID(choice)}, &one)
+		ok, err := store.FetchOne("SELECT 1 FROM election_candidates WHERE poll_id = $1 AND user_id = $2", []any{pollID, shared.ParseID(choice)}, &one)
 		if err != nil {
 			return err
 		}
@@ -558,7 +561,7 @@ func handleVote(r *request, pollID int64, choice string) error {
 	}
 	// голос окончательный: повторное нажатие не меняет его
 	var inserted string
-	found, err := fetchOne(`INSERT INTO poll_votes (poll_id, voter_id, choice) VALUES ($1, $2, $3)
+	found, err := store.FetchOne(`INSERT INTO poll_votes (poll_id, voter_id, choice) VALUES ($1, $2, $3)
 		ON CONFLICT (poll_id, voter_id) DO NOTHING RETURNING choice`, []any{pollID, r.userID(), choice}, &inserted)
 	if err != nil {
 		return err
@@ -582,7 +585,7 @@ func announcePoll(p *poll, note string) error {
 	if p.ChannelID == nil || p.MessageID == nil {
 		return nil
 	}
-	channel, message := idStr(*p.ChannelID), idStr(*p.MessageID)
+	channel, message := shared.IDStr(*p.ChannelID), shared.IDStr(*p.MessageID)
 	embed, err := pollEmbed(p)
 	if err != nil {
 		return err
@@ -606,7 +609,7 @@ func resolvePoll(p *poll) error {
 		return err
 	}
 	voters := slices.DeleteFunc(active, func(u int64) bool { return targetedKind(kind) && u == target })
-	rows, err := fetch[struct {
+	rows, err := store.Fetch[struct {
 		VoterID int64
 		Choice  string
 	}]("SELECT voter_id, choice FROM poll_votes WHERE poll_id = $1", p.ID)
@@ -637,7 +640,7 @@ func resolvePoll(p *poll) error {
 	case "revoke":
 		passed = n > 0 && yes*3 >= 2*n
 		if passed {
-			if err := exec("DELETE FROM citizens WHERE guild_id = $1 AND user_id = $2", gid, target); err != nil {
+			if err := store.Exec("DELETE FROM citizens WHERE guild_id = $1 AND user_id = $2", gid, target); err != nil {
 				return err
 			}
 			result = fmt.Sprintf("%s лишён гражданства (%d из %d за).", mention(target), yes, n)
@@ -651,7 +654,7 @@ func resolvePoll(p *poll) error {
 			punished, verdict = target, "виновен"
 		}
 		reason := fmt.Sprintf("Суд #%d: %s", p.ID, verdict)
-		if err := addEntry(gid, punished, "owe", amount, botUserID, &reason, "court"); err != nil {
+		if err := store.AddEntry(gid, punished, "owe", amount, botUserID, &reason, "court"); err != nil {
 			return err
 		}
 		if passed {
@@ -662,7 +665,7 @@ func resolvePoll(p *poll) error {
 	case "marginal":
 		passed = yes*2 > n
 		if passed {
-			if err := exec("INSERT INTO marginals (guild_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", gid, target); err != nil {
+			if err := store.Exec("INSERT INTO marginals (guild_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", gid, target); err != nil {
 				return err
 			}
 			result = fmt.Sprintf("%s признан маргиналом (%d из %d за) и пропустит ближайшую выдачу наград.", mention(target), yes, n)
@@ -672,7 +675,7 @@ func resolvePoll(p *poll) error {
 	case "law":
 		passed = yes > no
 		if passed {
-			if err := exec("INSERT INTO laws (guild_id, text, poll_id) VALUES ($1, $2, $3)", gid, p.text(), p.ID); err != nil {
+			if err := store.Exec("INSERT INTO laws (guild_id, text, poll_id) VALUES ($1, $2, $3)", gid, p.text(), p.ID); err != nil {
 				return err
 			}
 			result = fmt.Sprintf("Закон принят (%d за / %d против). Смотри `/laws`.", yes, no)
@@ -691,11 +694,11 @@ func resolvePoll(p *poll) error {
 			var top []int64
 			for c, v := range tally {
 				if v == best {
-					top = append(top, parseID(c))
+					top = append(top, shared.ParseID(c))
 				}
 			}
 			winner := top[rand.IntN(len(top))]
-			if err := exec("INSERT INTO presidents (guild_id, user_id) VALUES ($1, $2)", gid, winner); err != nil {
+			if err := store.Exec("INSERT INTO presidents (guild_id, user_id) VALUES ($1, $2)", gid, winner); err != nil {
 				return err
 			}
 			result = fmt.Sprintf("Новый президент — %s (%d голосов)", mention(winner), best)
@@ -713,7 +716,7 @@ func resolvePoll(p *poll) error {
 	if passed {
 		status = "passed"
 	}
-	if err := exec("UPDATE polls SET status = $1, result = $2 WHERE id = $3", status, result, p.ID); err != nil {
+	if err := store.Exec("UPDATE polls SET status = $1, result = $2 WHERE id = $3", status, result, p.ID); err != nil {
 		return err
 	}
 	if err := syncRoles(gid); err != nil {
@@ -727,11 +730,11 @@ func resolvePoll(p *poll) error {
 }
 
 func memberName(guildID, userID int64) string {
-	m, err := session.GuildMember(idStr(guildID), idStr(userID))
+	m, err := session.GuildMember(shared.IDStr(guildID), shared.IDStr(userID))
 	if err != nil {
-		return idStr(userID)
+		return shared.IDStr(userID)
 	}
-	return orEmpty(displayName(m, m.User), idStr(userID))
+	return shared.OrEmpty(shared.DisplayName(m, m.User), shared.IDStr(userID))
 }
 
 func startElectionVoting(p *poll) error {
@@ -740,7 +743,7 @@ func startElectionVoting(p *poll) error {
 		return err
 	}
 	if len(cands) == 0 {
-		if err := exec("UPDATE polls SET status = 'failed', result = 'Никто не выдвинулся.' WHERE id = $1", p.ID); err != nil {
+		if err := store.Exec("UPDATE polls SET status = 'failed', result = 'Никто не выдвинулся.' WHERE id = $1", p.ID); err != nil {
 			return err
 		}
 		p, err = getPoll(p.ID)
@@ -749,21 +752,21 @@ func startElectionVoting(p *poll) error {
 		}
 		return announcePoll(p, fmt.Sprintf("**%s #%d:** никто не выдвинулся.", kindTitles["election"], p.ID))
 	}
-	if err := exec("UPDATE polls SET status = 'open', ends_at = $1 WHERE id = $2", time.Now().Add(electionHours*time.Hour), p.ID); err != nil {
+	if err := store.Exec("UPDATE polls SET status = 'open', ends_at = $1 WHERE id = $2", time.Now().Add(electionHours*time.Hour), p.ID); err != nil {
 		return err
 	}
 	p, err = getPoll(p.ID)
 	if err != nil || p.ChannelID == nil {
 		return err
 	}
-	channel := idStr(*p.ChannelID)
+	channel := shared.IDStr(*p.ChannelID)
 	if p.MessageID != nil {
 		none := []discordgo.MessageComponent{}
-		_, _ = session.ChannelMessageEditComplex(&discordgo.MessageEdit{ID: idStr(*p.MessageID), Channel: channel, Components: &none})
+		_, _ = session.ChannelMessageEditComplex(&discordgo.MessageEdit{ID: shared.IDStr(*p.MessageID), Channel: channel, Components: &none})
 	}
 	var options []discordgo.SelectMenuOption
 	for _, c := range cands[:min(len(cands), 25)] {
-		options = append(options, discordgo.SelectMenuOption{Label: truncate(memberName(p.GuildID, c), 100), Value: idStr(c)})
+		options = append(options, discordgo.SelectMenuOption{Label: truncate(memberName(p.GuildID, c), 100), Value: shared.IDStr(c)})
 	}
 	embed, err := pollEmbed(p)
 	if err != nil {
@@ -778,11 +781,11 @@ func startElectionVoting(p *poll) error {
 	if err != nil {
 		return err
 	}
-	return exec("UPDATE polls SET channel_id = $1, message_id = $2 WHERE id = $3", parseID(msg.ChannelID), parseID(msg.ID), p.ID)
+	return store.Exec("UPDATE polls SET channel_id = $1, message_id = $2 WHERE id = $3", shared.ParseID(msg.ChannelID), shared.ParseID(msg.ID), p.ID)
 }
 
 func pollsLoop() {
-	rows, err := fetch[poll]("SELECT " + pollColumns + " FROM polls WHERE status IN ('open', 'nominating') AND ends_at <= now() ORDER BY ends_at")
+	rows, err := store.Fetch[poll]("SELECT " + pollColumns + " FROM polls WHERE status IN ('open', 'nominating') AND ends_at <= now() ORDER BY ends_at")
 	if err != nil {
 		log.Printf("Ошибка подведения итогов голосований: %v", err)
 		return
@@ -909,14 +912,14 @@ func nominateHandler(r *request) error {
 		return err
 	}
 	var pollID int64
-	found, err := fetchOne("SELECT id FROM polls WHERE guild_id = $1 AND kind = 'election' AND status = 'nominating'", []any{r.guildID()}, &pollID)
+	found, err := store.FetchOne("SELECT id FROM polls WHERE guild_id = $1 AND kind = 'election' AND status = 'nominating'", []any{r.guildID()}, &pollID)
 	if err != nil {
 		return err
 	}
 	if !found {
 		return r.replyHidden("Сейчас нет выдвижения. Начать выборы: `/election`.")
 	}
-	if err := exec("INSERT INTO election_candidates (poll_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", pollID, r.userID()); err != nil {
+	if err := store.Exec("INSERT INTO election_candidates (poll_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", pollID, r.userID()); err != nil {
 		return err
 	}
 	if err := r.reply(fmt.Sprintf("🎙️ %s баллотируется в президенты!", r.userMention())); err != nil {
@@ -931,7 +934,7 @@ func nominateHandler(r *request) error {
 		return err
 	}
 	embeds := []*discordgo.MessageEmbed{embed}
-	_, _ = session.ChannelMessageEditComplex(&discordgo.MessageEdit{ID: idStr(*p.MessageID), Channel: idStr(*p.ChannelID), Embeds: &embeds})
+	_, _ = session.ChannelMessageEditComplex(&discordgo.MessageEdit{ID: shared.IDStr(*p.MessageID), Channel: shared.IDStr(*p.ChannelID), Embeds: &embeds})
 	return nil
 }
 
@@ -945,7 +948,7 @@ func periodScores(guildID int64, start, end time.Time) (scores, games map[int64]
 		S, G   int
 	}
 	for _, table := range []string{"dota_matches", "pubg_matches"} {
-		rows, err := fetch[row]("SELECT user_id, SUM(pushups)::int, COUNT(*)::int FROM "+table+
+		rows, err := store.Fetch[row]("SELECT user_id, SUM(pushups)::int, COUNT(*)::int FROM "+table+
 			" WHERE guild_id = $1 AND played_at >= $2 AND played_at < $3 GROUP BY user_id", guildID, start, end)
 		if err != nil {
 			return nil, nil, err
@@ -955,7 +958,7 @@ func periodScores(guildID int64, start, end time.Time) (scores, games map[int64]
 			games[r.UserID] += r.G
 		}
 	}
-	court, err := fetch[struct {
+	court, err := store.Fetch[struct {
 		UserID int64
 		S      int
 	}](`SELECT user_id, SUM(amount)::int FROM entries WHERE guild_id = $1 AND kind = 'owe' AND source = 'court'
@@ -1058,12 +1061,12 @@ func maybeRunAwards(guildID int64) error {
 	monthStart := addMonths(monthEnd, -1)
 	period := fmt.Sprintf("%d-%02d", monthStart.Year(), int(monthStart.Month()))
 	var claimed string
-	found, err := fetchOne("INSERT INTO award_runs (guild_id, period) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING period", []any{guildID, period}, &claimed)
+	found, err := store.FetchOne("INSERT INTO award_runs (guild_id, period) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING period", []any{guildID, period}, &claimed)
 	if err != nil || !found {
 		return err // уже подводили
 	}
 	var firstLink *time.Time
-	if _, err := fetchOne(`SELECT min(linked_at) FROM (SELECT linked_at FROM dota_links WHERE guild_id = $1
+	if _, err := store.FetchOne(`SELECT min(linked_at) FROM (SELECT linked_at FROM dota_links WHERE guild_id = $1
 		UNION ALL SELECT linked_at FROM pubg_links WHERE guild_id = $1) AS l`, []any{guildID}, &firstLink); err != nil {
 		return err
 	}
@@ -1090,7 +1093,7 @@ func maybeRunAwards(guildID int64) error {
 	if len(marginals) > 0 {
 		parts = append(parts, "", "Маргиналы пропустили эту выдачу и снова участвуют: "+mentions(marginals))
 	}
-	if err := exec("DELETE FROM marginals WHERE guild_id = $1", guildID); err != nil {
+	if err := store.Exec("DELETE FROM marginals WHERE guild_id = $1", guildID); err != nil {
 		return err
 	}
 	if err := syncRoles(guildID); err != nil {
@@ -1108,7 +1111,7 @@ func civicLoop() {
 	session.State.RLock()
 	ids := make([]int64, 0, len(session.State.Guilds))
 	for _, g := range session.State.Guilds {
-		ids = append(ids, parseID(g.ID))
+		ids = append(ids, shared.ParseID(g.ID))
 	}
 	session.State.RUnlock()
 	for _, id := range ids {

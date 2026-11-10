@@ -1,4 +1,4 @@
-package main
+package bot
 
 import (
 	"context"
@@ -17,6 +17,9 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/jackc/pgx/v5"
+
+	"pushups-bot/internal/shared"
+	"pushups-bot/internal/store"
 )
 
 var (
@@ -126,7 +129,7 @@ func processNewMatches(guildID int64) (results []dotaResult, failed []int64, err
 		sql += " WHERE guild_id = $1"
 		args = append(args, guildID)
 	}
-	links, err := fetch[dotaLink](sql, args...)
+	links, err := store.Fetch[dotaLink](sql, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -191,9 +194,9 @@ func processNewMatches(guildID int64) (results []dotaResult, failed []int64, err
 func saveDotaMatch(guildID int64, p dotaPlay, isParty bool) (*dotaResult, error) {
 	m := p.match
 	kda, pushups := kdaPushups(m.Kills, m.Deaths, m.Assists)
-	ctx, cancel := dbCtx()
+	ctx, cancel := store.Ctx()
 	defer cancel()
-	tx, err := db.Begin(ctx)
+	tx, err := store.DB.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -295,14 +298,14 @@ func linkDotaHandler(r *request) error {
 	}
 	var linkedAt time.Time
 	// перепривязка того же аккаунта не сдвигает начало учёта
-	if _, err := fetchOne(`INSERT INTO dota_links (guild_id, user_id, account_id, linked_by) VALUES ($1, $2, $3, $4)
+	if _, err := store.FetchOne(`INSERT INTO dota_links (guild_id, user_id, account_id, linked_by) VALUES ($1, $2, $3, $4)
 		ON CONFLICT (guild_id, user_id) DO UPDATE SET account_id = EXCLUDED.account_id, linked_by = EXCLUDED.linked_by,
 		linked_at = CASE WHEN dota_links.account_id = EXCLUDED.account_id THEN dota_links.linked_at ELSE now() END
 		RETURNING linked_at`, []any{r.guildID(), user.ID, accountID, r.userID()}, &linkedAt); err != nil {
 		return err
 	}
 	return r.followup(fmt.Sprintf("🔗 %s ↔ **%s** (`%d`)\nСчитаются пати-матчи с <t:%d:f>.",
-		user.mention(), orEmpty(player.Profile.Name, "?"), accountID, linkedAt.Unix()), nil, false)
+		user.mention(), shared.OrEmpty(player.Profile.Name, "?"), accountID, linkedAt.Unix()), nil, false)
 }
 
 func unlinkDotaHandler(r *request) error {
@@ -311,7 +314,7 @@ func unlinkDotaHandler(r *request) error {
 	}
 	user := r.userOption("user")
 	var accountID int64
-	found, err := fetchOne("DELETE FROM dota_links WHERE guild_id = $1 AND user_id = $2 RETURNING account_id",
+	found, err := store.FetchOne("DELETE FROM dota_links WHERE guild_id = $1 AND user_id = $2 RETURNING account_id",
 		[]any{r.guildID(), user.ID}, &accountID)
 	if err != nil {
 		return err
@@ -326,7 +329,7 @@ func dotaLinksHandler(r *request) error {
 	if !r.inGuild() {
 		return r.noGuild()
 	}
-	rows, err := fetch[struct {
+	rows, err := store.Fetch[struct {
 		UserID, AccountID int64
 		SoloSince         *time.Time
 	}]("SELECT user_id, account_id, solo_since FROM dota_links WHERE guild_id = $1 ORDER BY linked_at", r.guildID())
@@ -342,7 +345,7 @@ func dotaLinksHandler(r *request) error {
 		lines = append(lines, line)
 	}
 	return r.replyEmbed(&discordgo.MessageEmbed{
-		Title: "🔗 Привязанные аккаунты", Description: orEmpty(strings.Join(lines, "\n"), "Пока никого."), Color: colorRed,
+		Title: "🔗 Привязанные аккаунты", Description: shared.OrEmpty(strings.Join(lines, "\n"), "Пока никого."), Color: colorRed,
 		Footer: footer(fmt.Sprintf("Автопроверка каждые %d мин · только пати-игры", cfg.DotaCheckMinutes)),
 	}, true)
 }
@@ -377,7 +380,7 @@ func setDotaSolo(r *request, enabled bool) error {
 		return r.noGuild()
 	}
 	var since time.Time
-	found, err := fetchOne(`UPDATE dota_links SET solo_since = CASE WHEN $3 THEN COALESCE(solo_since, now()) ELSE NULL END
+	found, err := store.FetchOne(`UPDATE dota_links SET solo_since = CASE WHEN $3 THEN COALESCE(solo_since, now()) ELSE NULL END
 		WHERE guild_id = $1 AND user_id = $2 RETURNING COALESCE(solo_since, 'epoch'::timestamptz)`,
 		[]any{r.guildID(), r.userID(), enabled}, &since)
 	if err != nil {

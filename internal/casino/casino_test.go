@@ -1,4 +1,4 @@
-package main
+package casino
 
 import (
 	"bytes"
@@ -13,7 +13,24 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
+	"pushups-bot/internal/store"
+	"pushups-bot/internal/store/storetest"
 )
+
+const (
+	testGuild   = "1"
+	testGuildID = int64(1)
+)
+
+func count(t *testing.T, sql string, args ...any) int {
+	t.Helper()
+	var n int
+	if _, err := store.FetchOne(sql, args, &n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
 
 func casinoCall(t *testing.T, mux http.Handler, method, path, token string, body any) (int, map[string]any) {
 	t.Helper()
@@ -391,7 +408,7 @@ func TestCasinoRocket(t *testing.T) {
 }
 
 func TestCasinoReplay(t *testing.T) {
-	setup(t)
+	storetest.Begin(t)
 	cfg.GuildID, cfg.ActivityDir = testGuild, ""
 	cfg.ActivityDevUserID = 501
 	t.Cleanup(func() { cfg.ActivityDevUserID = 0 })

@@ -1,4 +1,5 @@
-package main
+// Package store — работа с базой Postgres.
+package store
 
 import (
 	"context"
@@ -9,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const schema = `
+const Schema = `
 CREATE TABLE IF NOT EXISTS entries (
     id         BIGSERIAL PRIMARY KEY,
     guild_id   BIGINT      NOT NULL,
@@ -24,7 +25,7 @@ CREATE INDEX IF NOT EXISTS idx_entries_guild_time ON entries (guild_id, created_
 -- откуда взялись отжимания: manual (/owe, /done), dota, pubg, court
 ALTER TABLE entries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
 UPDATE entries SET source = 'dota' WHERE source = 'manual' AND reason LIKE 'Dota %, матч %';
--- /done_ludoman может засчитать 0
+-- старые броски /done_ludoman могли засчитать 0
 ALTER TABLE entries DROP CONSTRAINT IF EXISTS entries_amount_check;
 ALTER TABLE entries ADD CONSTRAINT entries_amount_check CHECK (amount >= 0);
 
@@ -180,23 +181,26 @@ CREATE TABLE IF NOT EXISTS casino_bets (
 );
 `
 
-// querier — общее у пула и транзакции (в тестах всё идёт внутри откатываемой транзакции).
-type querier interface {
+// Querier — общее у пула и транзакции (в тестах всё идёт внутри откатываемой транзакции).
+type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-var db querier
+var DB Querier
+
+// WindowDays — период для лидербордов и остатков.
+const WindowDays = 365
 
 const dbTimeout = 10 * time.Second // зависший запрос не должен вешать команду
 
-func dbCtx() (context.Context, context.CancelFunc) {
+func Ctx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), dbTimeout)
 }
 
-func connectDB(url string) (*pgxpool.Pool, error) {
+func Connect(url string) (*pgxpool.Pool, error) {
 	conf, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, err
@@ -220,94 +224,76 @@ func connectDB(url string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-func exec(sql string, args ...any) error {
-	ctx, cancel := dbCtx()
+func Exec(sql string, args ...any) error {
+	ctx, cancel := Ctx()
 	defer cancel()
-	_, err := db.Exec(ctx, sql, args...)
+	_, err := DB.Exec(ctx, sql, args...)
 	return err
 }
 
-// fetch возвращает строки как структуры T (поля по порядку колонок).
-func fetch[T any](sql string, args ...any) ([]T, error) {
-	ctx, cancel := dbCtx()
+// Fetch возвращает строки как структуры T (поля по порядку колонок).
+func Fetch[T any](sql string, args ...any) ([]T, error) {
+	ctx, cancel := Ctx()
 	defer cancel()
-	rows, err := db.Query(ctx, sql, args...)
+	rows, err := DB.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[T])
 }
 
-// column возвращает первую колонку всех строк.
-func column[T any](sql string, args ...any) ([]T, error) {
-	ctx, cancel := dbCtx()
+// Column возвращает первую колонку всех строк.
+func Column[T any](sql string, args ...any) ([]T, error) {
+	ctx, cancel := Ctx()
 	defer cancel()
-	rows, err := db.Query(ctx, sql, args...)
+	rows, err := DB.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, pgx.RowTo[T])
 }
 
-// fetchOne читает одну строку в dest; found=false, если строк нет.
-func fetchOne(sql string, args []any, dest ...any) (found bool, err error) {
-	ctx, cancel := dbCtx()
+// FetchOne читает одну строку в dest; found=false, если строк нет.
+func FetchOne(sql string, args []any, dest ...any) (found bool, err error) {
+	ctx, cancel := Ctx()
 	defer cancel()
-	err = db.QueryRow(ctx, sql, args...).Scan(dest...)
+	err = DB.QueryRow(ctx, sql, args...).Scan(dest...)
 	if err == pgx.ErrNoRows {
 		return false, nil
 	}
 	return err == nil, err
 }
 
-func addEntry(guildID, userID int64, kind string, amount int, authorID int64, reason *string, source string) error {
-	return exec(`INSERT INTO entries (guild_id, user_id, kind, amount, author_id, reason, source)
+func AddEntry(guildID, userID int64, kind string, amount int, authorID int64, reason *string, source string) error {
+	return Exec(`INSERT INTO entries (guild_id, user_id, kind, amount, author_id, reason, source)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`, guildID, userID, kind, amount, authorID, reason, source)
 }
 
-type stat struct{ Owed, Done int }
+type Stat struct{ Owed, Done int }
 
-func (s stat) remaining() int { return max(0, s.Owed-s.Done) }
+func (s Stat) Remaining() int { return max(0, s.Owed-s.Done) }
 
-// guildStats: user_id -> назначено и сделано за последние windowDays дней.
-func guildStats(guildID int64) (map[int64]stat, error) {
-	rows, err := fetch[struct {
+// GuildStats: user_id -> назначено и сделано за последние WindowDays дней.
+func GuildStats(guildID int64) (map[int64]Stat, error) {
+	rows, err := Fetch[struct {
 		UserID     int64
 		Owed, Done int
 	}](`SELECT user_id,
 		COALESCE(SUM(amount) FILTER (WHERE kind = 'owe'), 0)::int,
 		COALESCE(SUM(amount) FILTER (WHERE kind = 'done'), 0)::int
 		FROM entries WHERE guild_id = $1 AND created_at >= now() - make_interval(days => $2)
-		GROUP BY user_id`, guildID, windowDays)
+		GROUP BY user_id`, guildID, WindowDays)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[int64]stat, len(rows))
+	out := make(map[int64]Stat, len(rows))
 	for _, r := range rows {
-		out[r.UserID] = stat{r.Owed, r.Done}
+		out[r.UserID] = Stat{r.Owed, r.Done}
 	}
 	return out, nil
 }
 
-func userStats(guildID, userID int64) (stat, error) {
-	stats, err := guildStats(guildID)
+func UserStats(guildID, userID int64) (Stat, error) {
+	stats, err := GuildStats(guildID)
 	return stats[userID], err
-}
-
-// ludomanBalance: user_id -> сколько отжиманий выиграно (+) или проиграно (−) на /done_ludoman.
-func ludomanBalance(guildID int64) (map[int64]int, error) {
-	rows, err := fetch[struct {
-		UserID int64
-		Delta  int
-	}](`SELECT user_id, SUM(amount - substring(reason from 'лудомания: ([0-9]+) ×')::int)::int
-		FROM entries WHERE guild_id = $1 AND kind = 'done' AND reason LIKE '🎰 лудомания:%'
-		AND created_at >= now() - make_interval(days => $2) GROUP BY user_id`, guildID, windowDays)
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[int64]int, len(rows))
-	for _, r := range rows {
-		out[r.UserID] = r.Delta
-	}
-	return out, nil
 }

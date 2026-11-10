@@ -1,17 +1,15 @@
-package main
+package bot
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
-	"net/http"
-	"runtime/debug"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
+	"pushups-bot/internal/shared"
 )
 
 var (
@@ -31,13 +29,6 @@ const (
 
 	flagEphemeral = discordgo.MessageFlagsEphemeral
 )
-
-func parseID(s string) int64 {
-	v, _ := strconv.ParseInt(s, 10, 64)
-	return v
-}
-
-func idStr(v int64) string { return strconv.FormatInt(v, 10) }
 
 func mention(v int64) string { return fmt.Sprintf("<@%d>", v) }
 
@@ -63,7 +54,7 @@ type request struct {
 	options map[string]*discordgo.ApplicationCommandInteractionDataOption
 }
 
-func (r *request) guildID() int64 { return parseID(r.i.GuildID) }
+func (r *request) guildID() int64 { return shared.ParseID(r.i.GuildID) }
 func (r *request) inGuild() bool  { return r.i.GuildID != "" }
 
 func (r *request) user() *discordgo.User {
@@ -73,7 +64,7 @@ func (r *request) user() *discordgo.User {
 	return r.i.User
 }
 
-func (r *request) userID() int64       { return parseID(r.user().ID) }
+func (r *request) userID() int64       { return shared.ParseID(r.user().ID) }
 func (r *request) userMention() string { return mention(r.userID()) }
 
 func (r *request) respond(data *discordgo.InteractionResponseData, kind discordgo.InteractionResponseType) error {
@@ -143,14 +134,14 @@ func (r *request) userOption(name string) target {
 	if !ok {
 		out := target{ID: r.userID(), Bot: r.user().Bot, Name: r.user().DisplayName()}
 		if r.i.Member != nil {
-			out.Name = displayName(r.i.Member, r.user())
+			out.Name = shared.DisplayName(r.i.Member, r.user())
 			out.JoinedAt = r.i.Member.JoinedAt
 		}
 		return out
 	}
 	id := o.Value.(string)
 	resolved := r.i.ApplicationCommandData().Resolved
-	out := target{ID: parseID(id), Name: id}
+	out := target{ID: shared.ParseID(id), Name: id}
 	var user *discordgo.User
 	if resolved != nil {
 		user = resolved.Users[id]
@@ -158,21 +149,11 @@ func (r *request) userOption(name string) target {
 			out.Bot, out.Name = user.Bot, user.DisplayName()
 		}
 		if m := resolved.Members[id]; m != nil {
-			out.Name = displayName(m, user)
+			out.Name = shared.DisplayName(m, user)
 			out.JoinedAt = m.JoinedAt
 		}
 	}
 	return out
-}
-
-func displayName(m *discordgo.Member, u *discordgo.User) string {
-	if m.Nick != "" {
-		return m.Nick
-	}
-	if u != nil {
-		return u.DisplayName()
-	}
-	return ""
 }
 
 func field(name, value string, inline bool) *discordgo.MessageEmbedField {
@@ -181,13 +162,6 @@ func field(name, value string, inline bool) *discordgo.MessageEmbedField {
 
 func footer(text string) *discordgo.MessageEmbedFooter {
 	return &discordgo.MessageEmbedFooter{Text: text}
-}
-
-func orEmpty(s, fallback string) string {
-	if s == "" {
-		return fallback
-	}
-	return s
 }
 
 // chunkEmbeds разбивает строки на embed'ы с лимитом Discord.
@@ -215,7 +189,7 @@ func channelGuild(channelID string) (int64, bool) {
 	if err != nil {
 		return 0, false
 	}
-	return parseID(ch.GuildID), true
+	return shared.ParseID(ch.GuildID), true
 }
 
 func isRESTStatus(err error, status int) bool {
@@ -223,16 +197,7 @@ func isRESTStatus(err error, status int) bool {
 	return errors.As(err, &rest) && rest.Response != nil && rest.Response.StatusCode == status
 }
 
-// protect не даёт панике в обработчике уронить весь бот.
-func protect(name string) {
-	if v := recover(); v != nil {
-		log.Printf("Паника в %s: %v\n%s", name, v, debug.Stack())
-	}
-}
-
 func withTimeout(d time.Duration) (discordgo.RequestOption, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	return discordgo.WithContext(ctx), cancel
 }
-
-func newHTTPClient() *http.Client { return &http.Client{Timeout: 30 * time.Second} }

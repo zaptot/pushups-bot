@@ -1,18 +1,15 @@
-package main
+package bot
 
 import (
 	"fmt"
-	"log"
-	"os"
-	"strconv"
 	"time"
-	_ "time/tzdata" // часовые пояса внутри бинарника, чтобы не зависеть от хостинга
 
-	"github.com/joho/godotenv"
+	"pushups-bot/internal/config"
+	"pushups-bot/internal/store"
 )
 
 const (
-	windowDays = 365 // период для лидербордов и остатков
+	windowDays = store.WindowDays
 	topSize    = 15
 	doneMin    = 10 // меньше за раз записать через /done нельзя
 
@@ -57,55 +54,8 @@ var (
 	pubgMatchTypes = map[string]bool{"official": true, "competitive": true} // обычные и рейтинговые
 
 	opendotaBase = "https://api.opendota.com/api"
-	pubgBase     string
+	pubgBase     string // задаётся в Start по PUBG_SHARD
 )
 
-// config читается из окружения (на Discloud) или из файла .env (локально).
-type config struct {
-	Token, GuildID, DatabaseURL     string
-	DotaChannelID, CivicChannelID   string
-	OpenDotaKey, PubgKey, PubgShard string
-	DotaCheckMinutes                int
-	Location                        *time.Location
-	ActivityPort, ActivityDir       string
-	ClientID, ClientSecret          string
-	ActivityDevUserID               int64
-}
-
-var cfg config
-
-func loadConfig() {
-	_ = godotenv.Load()
-	cfg = config{
-		Token:         os.Getenv("DISCORD_TOKEN"),
-		GuildID:       os.Getenv("GUILD_ID"),
-		DatabaseURL:   os.Getenv("DATABASE_URL"),
-		DotaChannelID: os.Getenv("DOTA_CHANNEL_ID"),
-		OpenDotaKey:   os.Getenv("OPENDOTA_API_KEY"),
-		PubgKey:       os.Getenv("PUBG_API_KEY"),
-		PubgShard:     envOr("PUBG_SHARD", "steam"),
-		ActivityPort:  os.Getenv("ACTIVITY_PORT"),
-		ActivityDir:   envOr("ACTIVITY_DIR", "activity/dist"),
-		ClientID:      os.Getenv("DISCORD_CLIENT_ID"),
-		ClientSecret:  os.Getenv("DISCORD_CLIENT_SECRET"),
-	}
-	cfg.ActivityDevUserID, _ = strconv.ParseInt(os.Getenv("ACTIVITY_DEV_USER_ID"), 10, 64)
-	cfg.CivicChannelID = envOr("CIVIC_CHANNEL_ID", cfg.DotaChannelID)
-	cfg.DotaCheckMinutes, _ = strconv.Atoi(envOr("DOTA_CHECK_MINUTES", "30"))
-	if cfg.DotaCheckMinutes <= 0 {
-		cfg.DotaCheckMinutes = 30
-	}
-	loc, err := time.LoadLocation(envOr("TIMEZONE", "Europe/Berlin"))
-	if err != nil {
-		log.Fatalf("Неверный TIMEZONE: %v", err)
-	}
-	cfg.Location = loc
-	pubgBase = "https://api.pubg.com/shards/" + cfg.PubgShard
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
+// cfg — настройки из окружения, заполняются config.Load.
+var cfg = &config.Values

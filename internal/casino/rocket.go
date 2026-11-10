@@ -1,4 +1,4 @@
-package main
+package casino
 
 import (
 	"encoding/json"
@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"pushups-bot/internal/shared"
 )
 
 const (
@@ -124,7 +126,7 @@ func handleRocketStart(w http.ResponseWriter, r *http.Request, p player) {
 		target = round.Auto
 	}
 	round.timer = time.AfterFunc(rocketDelay(target), func() {
-		defer protect("рокетке")
+		defer shared.Protect("рокетке")
 		rocketMu.Lock()
 		defer rocketMu.Unlock()
 		round.finish(target)

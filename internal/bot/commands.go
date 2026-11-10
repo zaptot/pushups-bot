@@ -1,16 +1,17 @@
-package main
+package bot
 
 import (
-	"bytes"
 	"cmp"
 	"fmt"
 	"log"
-	"math/rand/v2"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
+	"pushups-bot/internal/shared"
+	"pushups-bot/internal/store"
 )
 
 func floatPtr(v float64) *float64 { return &v }
@@ -47,14 +48,6 @@ func cmd(name, desc string, handler func(*request) error, opts ...*discordgo.App
 
 func commandList() []command {
 	amountDesc := fmt.Sprintf("Сколько отжиманий сделал (минимум %d)", doneMin)
-	var multiplier []*discordgo.ApplicationCommandOptionChoice
-	for _, c := range wheelMultipliers {
-		multiplier = append(multiplier, &discordgo.ApplicationCommandOptionChoice{Name: fmt.Sprintf("x%d — шанс %.0f%%", c, 100/float64(c)), Value: c})
-	}
-	multiplierOpt := &discordgo.ApplicationCommandOption{
-		Type: discordgo.ApplicationCommandOptionInteger, Name: "multiplier",
-		Description: "Во сколько раз умножатся отжимания при выигрыше (по умолчанию x2)", Choices: multiplier,
-	}
 	board := &discordgo.ApplicationCommandOption{
 		Type: discordgo.ApplicationCommandOptionString, Name: "board", Description: "Какой лидерборд показать", Required: true,
 		Choices: []*discordgo.ApplicationCommandOptionChoice{
@@ -76,8 +69,6 @@ func commandList() []command {
 			userOpt("user", "Кто должен отжиматься", true), intOpt("amount", "Сколько отжиманий", true, 1, 10000),
 			strOpt("reason", "За что, например «3 кила × 10»", false)),
 		cmd("done", "Записать сделанные отжимания", doneHandler, intOpt("amount", amountDesc, true, doneMin, 10000)),
-		cmd("done_ludoman", "Крутить колесо: выбери множитель — чем он выше, тем меньше жёлтого 🎡", ludomanHandler,
-			intOpt("amount", amountDesc, true, doneMin, 10000), multiplierOpt),
 		cmd("status", "Сколько отжиманий осталось и сделано", statusHandler, userOpt("user", "Чей статус (по умолчанию — твой)", false)),
 		cmd("top", "Лидерборд за последний год", topHandler, board),
 		cmd("history", "Последние записи участника", historyHandler, userOpt("user", "Чья история (по умолчанию — твоя)", false)),
@@ -115,7 +106,7 @@ func commandList() []command {
 var handlers = map[string]func(*request) error{}
 
 func onInteraction(_ *discordgo.Session, i *discordgo.InteractionCreate) {
-	defer protect("обработчике команды")
+	defer shared.Protect("обработчике команды")
 	r := &request{i: i}
 	var err error
 	switch i.Type {
@@ -138,9 +129,9 @@ func onInteraction(_ *discordgo.Session, i *discordgo.InteractionCreate) {
 		parts := strings.Split(data.CustomID, ":")
 		switch {
 		case parts[0] == "vote" && len(parts) == 3:
-			err = handleVote(r, parseID(parts[1]), parts[2])
+			err = handleVote(r, shared.ParseID(parts[1]), parts[2])
 		case parts[0] == "elect" && len(parts) == 2 && len(data.Values) > 0:
-			err = handleVote(r, parseID(parts[1]), data.Values[0])
+			err = handleVote(r, shared.ParseID(parts[1]), data.Values[0])
 		}
 	}
 	if err != nil {
@@ -166,10 +157,10 @@ func oweHandler(r *request) error {
 	if reason != "" {
 		reasonPtr = &reason
 	}
-	if err := addEntry(r.guildID(), user.ID, "owe", amount, r.userID(), reasonPtr, "manual"); err != nil {
+	if err := store.AddEntry(r.guildID(), user.ID, "owe", amount, r.userID(), reasonPtr, "manual"); err != nil {
 		return err
 	}
-	st, err := userStats(r.guildID(), user.ID)
+	st, err := store.UserStats(r.guildID(), user.ID)
 	if err != nil {
 		return err
 	}
@@ -177,17 +168,17 @@ func oweHandler(r *request) error {
 	if reason != "" {
 		text += " — " + reason
 	}
-	return r.reply(text + fmt.Sprintf("\nТеперь осталось: **%d**", st.remaining()))
+	return r.reply(text + fmt.Sprintf("\nТеперь осталось: **%d**", st.Remaining()))
 }
 
 func doneSummary(r *request, counted int) (string, error) {
-	st, err := userStats(r.guildID(), r.userID())
+	st, err := store.UserStats(r.guildID(), r.userID())
 	if err != nil {
 		return "", err
 	}
 	text := fmt.Sprintf("✅ %s засчитано **%d** отжиманий (за год: %d)\n", r.userMention(), counted, st.Done)
-	if st.remaining() > 0 {
-		return text + fmt.Sprintf("Осталось: **%d**", st.remaining()), nil
+	if st.Remaining() > 0 {
+		return text + fmt.Sprintf("Осталось: **%d**", st.Remaining()), nil
 	}
 	return text + "Долгов нет — красавчик! 🏆", nil
 }
@@ -209,7 +200,7 @@ func doneHandler(r *request) error {
 		return r.noGuild()
 	}
 	amount := r.intOption("amount", 0)
-	if err := addEntry(r.guildID(), r.userID(), "done", amount, r.userID(), nil, "manual"); err != nil {
+	if err := store.AddEntry(r.guildID(), r.userID(), "done", amount, r.userID(), nil, "manual"); err != nil {
 		return err
 	}
 	text, err := doneSummary(r, amount)
@@ -223,114 +214,12 @@ func doneHandler(r *request) error {
 	return nil
 }
 
-func file(name, contentType string, data []byte) []*discordgo.File {
-	return []*discordgo.File{{Name: name, ContentType: contentType, Reader: bytes.NewReader(data)}}
-}
-
-type wheelResult struct {
-	gif, png []byte
-	err      error
-}
-
-func renderWithTimeout(coef int, start, pointer float64) wheelResult {
-	done := make(chan wheelResult, 1)
-	go func() {
-		defer protect("рисовании колеса")
-		gifData, pngData, err := renderWheel(coef, start, pointer)
-		done <- wheelResult{gifData, pngData, err}
-	}()
-	select {
-	case res := <-done:
-		return res
-	case <-time.After(wheelTimeout):
-		return wheelResult{err: fmt.Errorf("превышено время рисования")}
-	}
-}
-
-func editResponse(r *request, edit *discordgo.WebhookEdit) error {
-	opt, cancel := withTimeout(wheelTimeout)
-	defer cancel()
-	_, err := session.InteractionResponseEdit(r.i.Interaction, edit, opt)
-	return err
-}
-
-func ludomanHandler(r *request) error {
-	if !r.inGuild() {
-		return r.noGuild()
-	}
-	if err := r.deferReply(); err != nil {
-		return err
-	}
-	amount := r.intOption("amount", 0)
-	coef := r.intOption("multiplier", wheelMultipliers[0])
-	win := rand.Float64() < 1/float64(coef) // шанс 1/coef: в среднем игра остаётся честной при любом множителе
-	applied := 0
-	if win {
-		applied = coef
-	}
-	counted := amount * applied
-	outcome := "проигрыш"
-	if win {
-		outcome = "выигрыш"
-	}
-	log.Printf("Колесо %s: %d × x%d, %s; рисую", r.user().Username, amount, coef, outcome)
-	started := time.Now()
-	start, pointer := pickSpin(coef, win)
-	wheel := renderWithTimeout(coef, start, pointer)
-	if wheel.err != nil {
-		log.Printf("Колесо не нарисовалось: %v", wheel.err)
-	} else {
-		log.Printf("Колесо нарисовано за %.1f с, %d КБ, память %s", time.Since(started).Seconds(), len(wheel.gif)/1024, memoryUsage())
-	}
-	// результат записан до показа: закрытие Discord во время вращения ничего не отменит
-	// нулевой результат тоже записываем, иначе проигрыш не попадёт в баланс лудомании
-	reason := fmt.Sprintf("🎰 лудомания: %d × %.2f", amount, float64(applied))
-	if err := addEntry(r.guildID(), r.userID(), "done", counted, r.userID(), &reason, "manual"); err != nil {
-		return err
-	}
-	gifShown := false
-	if wheel.gif != nil {
-		content := fmt.Sprintf("🎡 %s крутит колесо на **%d** отжиманий: x%d, шанс %.0f%%…", r.userMention(), amount, coef, 100/float64(coef))
-		err := editResponse(r, &discordgo.WebhookEdit{Content: &content, Files: file("wheel.gif", "image/gif", wheel.gif)})
-		if err != nil {
-			log.Printf("Анимация колеса не загрузилась: %v", err)
-		} else {
-			log.Printf("Колесо загружено в Discord, прошло %.1f с", time.Since(started).Seconds())
-			gifShown = true
-			time.Sleep(wheelSpinTime)
-		}
-	}
-	verdict := "💀 Мимо! Казино забрало всё."
-	if win {
-		verdict = fmt.Sprintf("🤑 Жёлтое! Отжимания умножены на %d!", coef)
-	}
-	summary, err := doneSummary(r, counted)
-	if err != nil {
-		return err
-	}
-	text := fmt.Sprintf("🎰 %d × **%d** = **%d**. %s\n", amount, applied, counted, verdict) + summary
-	// гифка остаётся в сообщении; картинка нужна, только если гифка не загрузилась
-	edit := &discordgo.WebhookEdit{Content: &text}
-	if !gifShown && wheel.png != nil {
-		edit.Files = file("wheel.png", "image/png", wheel.png)
-	}
-	if err := editResponse(r, edit); err != nil {
-		log.Printf("Картинка колеса не загрузилась: %v", err)
-		if err := editResponse(r, &discordgo.WebhookEdit{Content: &text}); err != nil {
-			return err
-		}
-	}
-	log.Printf("Колесо %s готово за %.1f с, память %s", r.user().Username, time.Since(started).Seconds(), memoryUsage())
-	announceCitizenship(r)
-	return nil
-}
-
 func statusHandler(r *request) error {
 	if !r.inGuild() {
 		return r.noGuild()
 	}
 	t := r.userOption("user")
-	st, err := userStats(r.guildID(), t.ID)
+	st, err := store.UserStats(r.guildID(), t.ID)
 	if err != nil {
 		return err
 	}
@@ -341,7 +230,7 @@ func statusHandler(r *request) error {
 	}
 	if citizen {
 		civic = "🏛️ гражданин"
-		if st.remaining() > freezeDebt {
+		if st.Remaining() > freezeDebt {
 			civic = "❄️ гражданин (заморожен)"
 		}
 		president, err := isPresident(r.guildID(), t.ID)
@@ -355,7 +244,7 @@ func statusHandler(r *request) error {
 	return r.replyEmbed(&discordgo.MessageEmbed{
 		Title: "Отжимания: " + t.Name, Color: colorOrange,
 		Fields: []*discordgo.MessageEmbedField{
-			field("Осталось", fmt.Sprint(st.remaining()), true),
+			field("Осталось", fmt.Sprint(st.Remaining()), true),
 			field("Сделано", fmt.Sprint(st.Done), true),
 			field("Назначено", fmt.Sprint(st.Owed), true),
 			field("Статус", civic, false),
@@ -368,7 +257,7 @@ func topHandler(r *request) error {
 	if !r.inGuild() {
 		return r.noGuild()
 	}
-	stats, err := guildStats(r.guildID())
+	stats, err := store.GuildStats(r.guildID())
 	if err != nil {
 		return err
 	}
@@ -385,7 +274,7 @@ func topHandler(r *request) error {
 	for id, st := range stats {
 		score := st.Done
 		if remaining {
-			score = st.remaining()
+			score = st.Remaining()
 		}
 		if score > 0 {
 			ranking = append(ranking, place{score, id})
@@ -395,10 +284,6 @@ func topHandler(r *request) error {
 	if len(ranking) > topSize {
 		ranking = ranking[:topSize]
 	}
-	balance, err := ludomanBalance(r.guildID())
-	if err != nil {
-		return err
-	}
 	medals := map[int]string{1: "🥇", 2: "🥈", 3: "🥉"}
 	var lines []string
 	for i, p := range ranking {
@@ -407,14 +292,11 @@ func topHandler(r *request) error {
 			medal = fmt.Sprintf("`%d.`", i+1)
 		}
 		line := fmt.Sprintf("%s %s — **%d**", medal, mention(p.id), p.score)
-		if b, ok := balance[p.id]; ok {
-			line += fmt.Sprintf(" (%+d)", b)
-		}
 		lines = append(lines, line)
 	}
 	return r.replyEmbed(&discordgo.MessageEmbed{
-		Title: title, Description: orEmpty(strings.Join(lines, "\n"), "Пока пусто."), Color: colorGold,
-		Footer: footer(fmt.Sprintf("За последние %d дней · в скобках — баланс лудомании", windowDays)),
+		Title: title, Description: shared.OrEmpty(strings.Join(lines, "\n"), "Пока пусто."), Color: colorGold,
+		Footer: footer(fmt.Sprintf("За последние %d дней", windowDays)),
 	}, false)
 }
 
@@ -423,7 +305,7 @@ func historyHandler(r *request) error {
 		return r.noGuild()
 	}
 	t := r.userOption("user")
-	rows, err := fetch[struct {
+	rows, err := store.Fetch[struct {
 		Kind      string
 		Amount    int
 		AuthorID  int64
@@ -448,7 +330,7 @@ func historyHandler(r *request) error {
 		lines = append(lines, line)
 	}
 	return r.replyEmbed(&discordgo.MessageEmbed{
-		Title: "История: " + t.Name, Description: orEmpty(strings.Join(lines, "\n"), "Записей нет."), Color: colorBlurple,
+		Title: "История: " + t.Name, Description: shared.OrEmpty(strings.Join(lines, "\n"), "Записей нет."), Color: colorBlurple,
 	}, true)
 }
 
@@ -473,7 +355,7 @@ func undoHandler(r *request) error {
 	var kind string
 	var amount int
 	var reason *string
-	found, err := fetchOne(`SELECT id, user_id, kind, amount, reason FROM entries
+	found, err := store.FetchOne(`SELECT id, user_id, kind, amount, reason FROM entries
 		WHERE guild_id = $1 AND author_id = $2 ORDER BY id DESC LIMIT 1`,
 		[]any{r.guildID(), r.userID()}, &id, &userID, &kind, &amount, &reason)
 	if err != nil {
@@ -485,7 +367,7 @@ func undoHandler(r *request) error {
 	if kind == "done" && reason != nil && strings.HasPrefix(*reason, "🎰 лудомания:") {
 		return r.replyHidden("🎰 Казино ставок не возвращает: бросок лудомании отменить нельзя.")
 	}
-	if err := exec("DELETE FROM entries WHERE id = $1", id); err != nil {
+	if err := store.Exec("DELETE FROM entries WHERE id = $1", id); err != nil {
 		return err
 	}
 	what := fmt.Sprintf("запись о %d сделанных отжиманиях", amount)

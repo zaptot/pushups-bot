@@ -1,4 +1,4 @@
-package main
+package casino
 
 import (
 	"crypto/rand"
@@ -13,6 +13,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bwmarrin/discordgo"
+
+	"pushups-bot/internal/config"
+	"pushups-bot/internal/shared"
 )
 
 const (
@@ -67,8 +72,15 @@ func allowDiscordFrame(next http.Handler) http.Handler {
 	})
 }
 
-func serveActivity() {
-	defer protect("казино")
+var (
+	cfg     = &config.Values
+	session *discordgo.Session
+)
+
+// Serve запускает HTTP-сервер казино на ACTIVITY_PORT; s нужна для проверки участников сервера.
+func Serve(s *discordgo.Session) {
+	session = s
+	defer shared.Protect("казино")
 	srv := &http.Server{Addr: ":" + cfg.ActivityPort, Handler: allowDiscordFrame(activityMux()), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("Казино: порт %s, режим разработки %v", cfg.ActivityPort, cfg.ActivityDevUserID != 0)
 	if err := srv.ListenAndServe(); err != nil {
@@ -122,7 +134,7 @@ func playerKey(p player) [2]int64 { return [2]int64{p.GuildID, p.UserID} }
 
 func auth(h playerHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		defer protect("обработчике казино")
+		defer shared.Protect("обработчике казино")
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		playersMu.Lock()
 		p, ok := players[token]
@@ -173,7 +185,7 @@ func handleConfig(w http.ResponseWriter, _ *http.Request) {
 }
 
 func handleSession(w http.ResponseWriter, r *http.Request) {
-	defer protect("входе в казино")
+	defer shared.Protect("входе в казино")
 	var req struct{ Code, GuildID string }
 	if r.ContentLength != 0 && !readJSON(w, r, &req) {
 		return
@@ -188,7 +200,7 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "Режим разработки работает только с этого компьютера")
 			return
 		}
-		p = player{UserID: cfg.ActivityDevUserID, GuildID: parseID(cfg.GuildID), Name: "Тестовый игрок"}
+		p = player{UserID: cfg.ActivityDevUserID, GuildID: shared.ParseID(cfg.GuildID), Name: "Тестовый игрок"}
 		if p.GuildID == 0 {
 			writeError(w, http.StatusInternalServerError, "Для режима разработки задай GUILD_ID")
 			return
@@ -204,7 +216,7 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": newPlayer(p),
-		"user":  map[string]string{"id": idStr(p.UserID), "name": p.Name},
+		"user":  map[string]string{"id": shared.IDStr(p.UserID), "name": p.Name},
 	})
 }
 
@@ -213,11 +225,11 @@ func discordPlayer(code, guild string) (player, int, error) {
 	if cfg.ClientSecret == "" || clientID == "" || session == nil {
 		return player{}, http.StatusUnauthorized, errors.New("Вход через Discord пока не настроен")
 	}
-	guildID := parseID(guild)
+	guildID := shared.ParseID(guild)
 	if guildID == 0 {
 		return player{}, http.StatusForbidden, errors.New("Казино работает только на сервере")
 	}
-	client := newHTTPClient()
+	client := shared.NewHTTPClient()
 	resp, err := client.PostForm("https://discord.com/api/oauth2/token", url.Values{
 		"client_id":     {clientID},
 		"client_secret": {cfg.ClientSecret},
@@ -244,14 +256,14 @@ func discordPlayer(code, guild string) (player, int, error) {
 	var user struct{ ID string }
 	err = json.NewDecoder(resp.Body).Decode(&user)
 	resp.Body.Close()
-	if err != nil || resp.StatusCode != http.StatusOK || parseID(user.ID) == 0 {
+	if err != nil || resp.StatusCode != http.StatusOK || shared.ParseID(user.ID) == 0 {
 		return player{}, http.StatusUnauthorized, errors.New("Discord не подтвердил вход")
 	}
 	m, err := session.GuildMember(guild, user.ID)
 	if err != nil {
 		return player{}, http.StatusForbidden, errors.New("Ты не участник этого сервера")
 	}
-	return player{UserID: parseID(user.ID), GuildID: guildID, Name: orEmpty(displayName(m, m.User), user.ID)}, 0, nil
+	return player{UserID: shared.ParseID(user.ID), GuildID: guildID, Name: shared.OrEmpty(shared.DisplayName(m, m.User), user.ID)}, 0, nil
 }
 
 func replayed(w http.ResponseWriter, id string, p player) bool {
