@@ -66,7 +66,7 @@ func commandList() []command {
 	founderCmd.def.DefaultMemberPermissions = &manageGuild
 	founderCmd.def.DMPermission = &noDM
 
-	return []command{
+	return append([]command{
 		cmd("owe", "Назначить участнику отжимания (проигранный спор)", oweHandler,
 			userOpt("user", "Кто должен отжиматься", true), intOpt("amount", "Сколько отжиманий", true, 1, 10000),
 			strOpt("reason", "За что, например «3 кила × 10»", false)),
@@ -104,7 +104,7 @@ func commandList() []command {
 		cmd("propose", "Предложить закон (референдум на 1 день)", proposeHandler, lawText),
 		cmd("election", "Начать выборы президента", electionHandler),
 		cmd("nominate", "Выдвинуть себя в президенты (во время выборов)", nominateHandler),
-	}
+	}, awardCommands()...)
 }
 
 var handlers = map[string]func(*request) error{}
