@@ -326,6 +326,9 @@ type Stat struct{ Owed, Done int }
 
 func (s Stat) Remaining() int { return max(0, s.Owed-s.Done) }
 
+// Surplus — сколько сделано сверх назначенного; этот запас покроет следующие долги.
+func (s Stat) Surplus() int { return max(0, s.Done-s.Owed) }
+
 // GuildStats: user_id -> назначено и сделано за последние WindowDays дней.
 func GuildStats(guildID int64) (map[int64]Stat, error) {
 	rows, err := Fetch[struct {
