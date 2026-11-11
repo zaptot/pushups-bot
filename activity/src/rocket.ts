@@ -1,3 +1,4 @@
+import { applyJackpot } from './jackpot';
 import { points, refreshBalance } from './wallet';
 import { request, type RocketPoll, type RocketResult, type RocketStart } from './api';
 import { el, errorText, hiDpiCanvas, stakeError, stakeField, type Cleanup } from './dom';
@@ -298,6 +299,7 @@ export function mountRocket(root: HTMLElement): Cleanup {
     status.textContent = verdict(res);
     console.log({ rocket: res });
     void refreshBalance();
+    applyJackpot(res.jackpot);
     button.textContent = 'Запуск';
     button.disabled = false;
     auto.disabled = false;

@@ -637,8 +637,8 @@ button:disabled {
   font-weight: 600;
 }
 
-/* «ты слишком беден»: картинка поверх игры, когда не хватает поинтов */
-.poor {
+/* оверлеи поверх игры: «ты слишком беден», срыв джекпота */
+.overlay {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -649,16 +649,21 @@ button:disabled {
   background: rgb(5 3 10 / 78%);
   backdrop-filter: blur(4px);
   cursor: pointer;
-  animation: poor-fade 0.2s ease-out;
+  animation: overlay-fade 0.2s ease-out;
 }
 
-.poor-card {
+.overlay-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 14px;
   width: min(100%, 720px);
-  animation: poor-pop 0.35s cubic-bezier(0.2, 1.4, 0.4, 1);
+  animation: overlay-pop 0.35s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+
+.overlay-close {
+  padding: 12px 22px;
 }
 
 .poor-img {
@@ -673,26 +678,217 @@ button:disabled {
     0 0 40px rgb(251 191 36 / 20%);
 }
 
-.poor-close {
-  padding: 12px 22px;
-}
-
-@keyframes poor-fade {
+@keyframes overlay-fade {
   from {
     opacity: 0;
   }
 }
 
-@keyframes poor-pop {
+@keyframes overlay-pop {
   from {
     opacity: 0;
     transform: scale(0.85) translateY(16px);
   }
 }
 
+/* джекпот: баннер в меню */
+.lobby {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(100%, 820px);
+}
+
+.lobby .menu {
+  width: 100%;
+}
+
+.jackpot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgb(251 191 36 / 50%);
+  background:
+    radial-gradient(ellipse 60% 120% at 50% 0%, rgb(251 191 36 / 22%), transparent 70%),
+    linear-gradient(180deg, rgb(251 191 36 / 8%), var(--panel));
+  box-shadow: 0 6px 22px rgb(0 0 0 / 35%);
+  animation: rise 0.4s ease-out backwards;
+}
+
+.jackpot.hot {
+  animation:
+    rise 0.4s ease-out backwards,
+    jackpot-glow 1.4s ease-in-out infinite alternate;
+}
+
+.jackpot-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.jackpot-label {
+  font-weight: 800;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.85em;
+}
+
+.jackpot-amount {
+  font-size: 2em;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(180deg, var(--gold-hi), var(--gold) 55%, #f59e0b);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 14px rgb(251 191 36 / 35%));
+}
+
+/* полоса «нагрева»: градиент на всю ширину, справа его закрывает тёмная «крышка» */
+.jackpot-bar {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: linear-gradient(90deg, #38bdf8, #a78bfa 35%, #facc15 65%, #ef4444);
+}
+
+.jackpot-cover {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  background: var(--panel-hi);
+  transition: width 0.6s ease-out;
+}
+
+.jackpot-heat {
+  align-self: flex-end;
+  font-size: 0.85em;
+  font-weight: 700;
+}
+
+.jackpot-last {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+@keyframes jackpot-glow {
+  to {
+    box-shadow:
+      0 6px 22px rgb(0 0 0 / 35%),
+      0 0 28px rgb(239 68 68 / 45%);
+    border-color: rgb(239 68 68 / 80%);
+  }
+}
+
+/* джекпот: строка под ставкой */
+.stake-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.jackpot-line {
+  position: relative;
+  margin: 0;
+  min-height: 1.3em;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.jackpot-float {
+  position: absolute;
+  right: 0;
+  top: 0;
+  color: var(--gold);
+  font-weight: 800;
+  pointer-events: none;
+  animation: jackpot-float 1.3s ease-out forwards;
+}
+
+@keyframes jackpot-float {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  20% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-14px);
+  }
+}
+
+/* срыв джекпота */
+.jackpot-win .overlay-card {
+  padding: 34px 20px 26px;
+  width: min(100%, 520px);
+  border-radius: 22px;
+  border: 2px solid rgb(251 191 36 / 70%);
+  background:
+    radial-gradient(circle at 50% 0%, rgb(251 191 36 / 35%), transparent 65%),
+    var(--panel);
+  box-shadow:
+    0 20px 60px rgb(0 0 0 / 60%),
+    0 0 60px rgb(251 191 36 / 30%);
+  text-align: center;
+}
+
+.jackpot-win-title {
+  margin: 0;
+  font-size: clamp(2em, 8vw, 3.2em);
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  background: linear-gradient(180deg, var(--gold-hi), var(--gold) 55%, #f59e0b);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 18px rgb(251 191 36 / 50%));
+}
+
+.jackpot-win-sum {
+  margin: 0;
+  font-size: 1.6em;
+  font-weight: 800;
+  color: var(--up);
+}
+
+.confetti {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.confetti i {
+  position: absolute;
+  top: -12px;
+  width: 8px;
+  height: 14px;
+  border-radius: 2px;
+  animation: confetti-fall linear forwards;
+}
+
+@keyframes confetti-fall {
+  to {
+    transform: translate(var(--drift), 105vh) rotate(var(--spin));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .poor,
-  .poor-card {
+  .overlay,
+  .overlay-card,
+  .jackpot,
+  .jackpot.hot {
     animation: none;
   }
 }

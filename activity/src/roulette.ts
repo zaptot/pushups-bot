@@ -1,3 +1,4 @@
+import { applyJackpot } from './jackpot';
 import { points, refreshBalance, spend } from './wallet';
 import { request, type RouletteBet, type RouletteResult } from './api';
 import { el, errorText, hiDpiCanvas, stakeError, stakeField, type Cleanup } from './dom';
@@ -188,6 +189,7 @@ export function mountRoulette(root: HTMLElement): Cleanup {
         status.textContent = verdict(res);
         spin.disabled = false;
         void refreshBalance();
+        applyJackpot(res.jackpot);
       });
     } catch (e) {
       if (!disposed) {

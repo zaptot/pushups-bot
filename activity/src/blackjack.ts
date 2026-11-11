@@ -1,3 +1,4 @@
+import { applyJackpot } from './jackpot';
 import { points, refreshBalance } from './wallet';
 import { request, type BlackjackAction, type BlackjackState, type BlackjackStatus } from './api';
 import { el, errorText, stakeError, stakeField, type Cleanup } from './dom';
@@ -97,6 +98,9 @@ export function mountBlackjack(root: HTMLElement): Cleanup {
         render(next ?? state);
       }
       void refreshBalance();
+      if (method === 'POST' && next && next.status !== 'playing') {
+        applyJackpot(next.jackpot);
+      }
     } catch (e) {
       if (!disposed) {
         status.textContent = errorText(e);

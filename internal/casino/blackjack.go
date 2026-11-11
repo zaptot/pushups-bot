@@ -195,7 +195,7 @@ func blackjackStep(h *blackjackHand) (json.RawMessage, error) {
 	h.Payout = roundPayout(h.Stake, h.Mult)
 	log.Printf("Блэкджек %d: ставка %d, %s, выигрыш %d", h.p.UserID, h.Stake, h.Status, h.Payout)
 	return settle(bet{
-		ID: h.ID, GuildID: h.p.GuildID, UserID: h.p.UserID, Game: "blackjack",
+		ID: h.ID, GuildID: h.p.GuildID, UserID: h.p.UserID, Name: h.p.Name, Game: "blackjack",
 		Stake: h.Stake, Multiplier: h.Mult, Payout: h.Payout, Result: h.view(),
 	}, false)
 }

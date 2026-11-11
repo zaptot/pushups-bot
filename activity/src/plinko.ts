@@ -1,3 +1,4 @@
+import { applyJackpot } from './jackpot';
 import { points, refreshBalance, spend } from './wallet';
 import { request, type PlinkoResult, type PlinkoRisk, type PlinkoTables } from './api';
 import { el, errorText, hiDpiCanvas, stakeError, stakeField, type Cleanup } from './dom';
@@ -256,6 +257,7 @@ export function mountPlinko(root: HTMLElement): Cleanup {
       }
       landedAt.set(ball.res.slot, now);
       series.payout += ball.res.payout;
+      applyJackpot(ball.res.jackpot);
       if (running) {
         progress();
       }

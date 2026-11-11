@@ -94,6 +94,7 @@ func activityMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/session", handleSession)
 	mux.HandleFunc("GET /api/balance", auth(handleBalance))
 	mux.HandleFunc("GET /api/shop", auth(handleShop))
+	mux.HandleFunc("GET /api/jackpot", auth(handleJackpot))
 	mux.HandleFunc("POST /api/shop/buy", auth(handleBuy))
 	mux.HandleFunc("POST /api/roulette", auth(handleRoulette))
 	mux.HandleFunc("GET /api/plinko/tables", auth(handlePlinkoTables))
