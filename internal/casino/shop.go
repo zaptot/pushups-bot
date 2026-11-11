@@ -48,7 +48,7 @@ func handleBuy(w http.ResponseWriter, r *http.Request, p player) {
 	}
 	orderID, bal, err := economy.Buy(p.GuildID, p.UserID, item)
 	if errors.Is(err, economy.ErrNotEnough) {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		writeNotEnough(w, err)
 		return
 	}
 	if err != nil {
