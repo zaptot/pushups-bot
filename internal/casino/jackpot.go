@@ -24,6 +24,7 @@ import (
 // вместе с пулом и одинаков для каждого поставленного поинта. При jackpotDivisor = 1,8 млн и
 // ставках ~20 поинтов пул срывается в среднем раз на ~340 ставок, медиана приза ~325 (TestSimJackpot).
 const (
+	jackpotSeed   = 200  // стартовый пул сервера (тот же, что в миграции в store.Schema)
 	jackpotShare  = 0.10 // доля проигрыша, которая идёт в пул
 	jackpotKeep   = 0.10 // доля пула, которая остаётся затравкой следующего джекпота
 	jackpotTarget = 350  // около этого пул обычно срывается (симуляция: медиана приза ~325): по нему страница рисует «нагрев»
@@ -91,9 +92,10 @@ func settle(b bet, debit bool) (json.RawMessage, error) {
 	_, err := economy.Apply(b.GuildID, b.UserID, func(ctx context.Context, tx pgx.Tx) error {
 		// строка пула блокируется до конца транзакции: ставки разных игроков разыгрывают его по очереди
 		var pool int
-		if err := tx.QueryRow(ctx, `INSERT INTO jackpot (guild_id, pool) VALUES ($1, $2)
-			ON CONFLICT (guild_id) DO UPDATE SET pool = jackpot.pool + EXCLUDED.pool RETURNING pool`,
-			b.GuildID, added).Scan(&pool); err != nil {
+		// первая ставка сервера создаёт пул сразу со стартовой затравкой
+		if err := tx.QueryRow(ctx, `INSERT INTO jackpot (guild_id, pool, seeded) VALUES ($1, $2::int + $3::int, true)
+			ON CONFLICT (guild_id) DO UPDATE SET pool = jackpot.pool + $2::int RETURNING pool`,
+			b.GuildID, added, jackpotSeed).Scan(&pool); err != nil {
 			return err
 		}
 		jp = jackpotOutcome{Pool: pool, Added: added}
@@ -175,12 +177,16 @@ type jackpotState struct {
 
 func handleJackpot(w http.ResponseWriter, _ *http.Request, p player) {
 	state := jackpotState{Divisor: jackpotDivisor, Target: jackpotTarget}
-	if _, err := store.FetchOne(`SELECT pool FROM jackpot WHERE guild_id = $1`, []any{p.GuildID}, &state.Pool); err != nil {
+	found, err := store.FetchOne(`SELECT pool FROM jackpot WHERE guild_id = $1`, []any{p.GuildID}, &state.Pool)
+	if err != nil {
 		respondBet(w, nil, err, p)
 		return
 	}
+	if !found {
+		state.Pool = jackpotSeed // ставок ещё не было: пул создастся с затравкой на первой
+	}
 	var last jackpotWin
-	found, err := store.FetchOne(`SELECT name, game, amount, created_at FROM jackpot_wins WHERE guild_id = $1
+	found, err = store.FetchOne(`SELECT name, game, amount, created_at FROM jackpot_wins WHERE guild_id = $1
 		ORDER BY created_at DESC LIMIT 1`, []any{p.GuildID}, &last.Name, &last.Game, &last.Amount, &last.At)
 	if err != nil {
 		respondBet(w, nil, err, p)
