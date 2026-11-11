@@ -383,3 +383,42 @@ func pct(m map[string]int, n int) string {
 	}
 	return out
 }
+
+// ---------- Джекпот ----------
+
+// TestSimJackpot: ставки по 20 на красное — сколько в среднем пул набирает до срыва,
+// сколько ставок проходит между срывами и сколько поинтов казино печатает.
+func TestSimJackpot(t *testing.T) {
+	simEnabled(t)
+	const (
+		stake = 20
+		bets  = 4_000_000
+	)
+	var pool, drops, prizes int
+	var staked, payout int64
+	var sizes []float64
+	for range bets {
+		won := rand.IntN(37) < 18
+		pay := 0
+		if won {
+			pay = 2 * stake
+		}
+		staked += stake
+		payout += int64(pay)
+		pool += jackpotContribution(stake, pay)
+		if rand.Float64() < jackpotChance(stake, pool) {
+			prize := jackpotPrize(pool)
+			pool -= prize
+			prizes += prize
+			drops++
+			sizes = append(sizes, float64(prize))
+		}
+	}
+	sort.Float64s(sizes)
+	q := func(p float64) float64 { return sizes[int(p*float64(len(sizes)-1))] }
+	t.Logf("джекпот, ставки по %d на красное: срывов %d, ставок между срывами %.0f", stake, drops, float64(bets)/float64(drops))
+	t.Logf("  приз: средний %.0f, p10 %.0f / медиана %.0f / p90 %.0f", float64(prizes)/float64(drops), q(0.1), q(0.5), q(0.9))
+	t.Logf("  RTP без джекпота %.2f%%, с джекпотом %.2f%% (печать поинтов %+.2f%% от ставок)",
+		float64(payout)/float64(staked)*100, float64(payout+int64(prizes))/float64(staked)*100,
+		float64(payout+int64(prizes)-staked)/float64(staked)*100)
+}

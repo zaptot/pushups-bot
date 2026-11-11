@@ -1,3 +1,5 @@
+import { jackpotLine } from './jackpot';
+
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className = '',
@@ -17,7 +19,8 @@ export const stakeMin = 10;
 export const stakeMax = 10000;
 
 export interface StakeField {
-  row: HTMLLabelElement;
+  /** Поле ставки и под ним строка джекпота с шансом сорвать его этой ставкой. */
+  row: HTMLDivElement;
   read: () => number | null;
 }
 
@@ -27,12 +30,14 @@ export function stakeField(initial = 20): StakeField {
   input.min = String(stakeMin);
   input.max = String(stakeMax);
   input.value = String(initial);
-  const row = el('label', 'stake-row', 'Ставка, поинтов');
-  row.append(input);
+  const label = el('label', 'stake-row', 'Ставка, поинтов');
+  label.append(input);
   const read = (): number | null => {
     const n = Number(input.value);
     return Number.isInteger(n) && n >= stakeMin && n <= stakeMax ? n : null;
   };
+  const row = el('div', 'stake-field');
+  row.append(label, jackpotLine(input, read));
   return { row, read };
 }
 

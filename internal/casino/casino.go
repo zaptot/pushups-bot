@@ -22,6 +22,7 @@ var errBetOwner = errors.New("ставка с таким id принадлежи
 type bet struct {
 	ID              string
 	GuildID, UserID int64
+	Name            string // для объявления о джекпоте
 	Game            string
 	Stake           int
 	Multiplier      float64
@@ -69,33 +70,4 @@ func stakeMove(id, ref string, stake int) economy.Move {
 func hold(p player, id, ref string, stake int) error {
 	_, err := economy.Apply(p.GuildID, p.UserID, nil, stakeMove(id, ref, stake))
 	return err
-}
-
-// settle записывает итог ставки и начисляет выигрыш одной транзакцией.
-// debit — списать ставку здесь же (для игр в один ход; у блэкджека и рокетки она списана в hold).
-func settle(b bet, debit bool) (json.RawMessage, error) {
-	result, err := json.Marshal(b.Result)
-	if err != nil {
-		return nil, err
-	}
-	var moves []economy.Move
-	if debit {
-		moves = append(moves, stakeMove(b.ID, "stake", b.Stake))
-	}
-	moves = append(moves, economy.Move{Amount: b.Payout, Ref: "win:" + b.ID, BetID: b.ID, Reason: "выигрыш в казино"})
-	_, err = economy.ApplyInsert(b.GuildID, b.UserID, economy.Insert{
-		SQL: `INSERT INTO casino_bets (id, guild_id, user_id, game, stake, multiplier, payout, result)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) ON CONFLICT (id) DO NOTHING`,
-		Args:     []any{b.ID, b.GuildID, b.UserID, b.Game, b.Stake, b.Multiplier, b.Payout, string(result)},
-		Conflict: errSettled,
-	}, moves...)
-	// ставка с этим id уже записана (повтор запроса): отдаём сохранённый итог, ничего не списав
-	if errors.Is(err, errSettled) {
-		stored, _, err := replay(b.ID, b.UserID)
-		return stored, err
-	}
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
 }

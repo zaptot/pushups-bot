@@ -193,6 +193,23 @@ CREATE TABLE IF NOT EXISTS wallet (
 );
 CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet (guild_id, user_id);
 
+-- джекпот казино: в пул идёт доля проигрышей, срывается с любой ставки (см. casino/jackpot.go)
+CREATE TABLE IF NOT EXISTS jackpot (
+    guild_id BIGINT  PRIMARY KEY,
+    pool     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS jackpot_wins (
+    bet_id     TEXT        PRIMARY KEY,
+    guild_id   BIGINT      NOT NULL,
+    user_id    BIGINT      NOT NULL,
+    name       TEXT        NOT NULL,
+    game       TEXT        NOT NULL,
+    amount     INTEGER     NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_jackpot_wins_guild ON jackpot_wins (guild_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS shop_orders (
     id         BIGSERIAL   PRIMARY KEY,
     guild_id   BIGINT      NOT NULL,

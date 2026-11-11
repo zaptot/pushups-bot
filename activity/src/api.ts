@@ -14,9 +14,31 @@ export interface Session {
   user: { id: string; name: string };
 }
 
+/** Что ставка сделала с джекпотом: пул после неё, сколько добавила, сколько сорвал игрок. */
+export interface JackpotOutcome {
+  pool: number;
+  added: number;
+  won?: number;
+}
+
+export interface JackpotWin {
+  name: string;
+  game: string;
+  amount: number;
+  at: string;
+}
+
+export interface JackpotState {
+  pool: number;
+  divisor: number;
+  target: number;
+  last: JackpotWin | null;
+}
+
 export interface Settled {
   multiplier: number;
   payout: number;
+  jackpot?: JackpotOutcome;
 }
 
 export type RouletteBetKind = 'red' | 'black' | 'even' | 'odd' | 'low' | 'high' | 'dozen' | 'number';

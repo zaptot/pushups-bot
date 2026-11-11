@@ -8,6 +8,7 @@ import { mountRocket } from './rocket';
 import { mountRoulette } from './roulette';
 import { showTooPoor } from './poor';
 import { mountShop } from './shop';
+import { jackpotBanner, startJackpotPolling } from './jackpot';
 import { refreshBalance, showBalanceIn } from './wallet';
 
 interface Game {
@@ -68,6 +69,7 @@ function render(root: HTMLElement, user: Session['user']): void {
   header.append(back, titleNode(), who);
   showBalanceIn(balance);
   void refreshBalance();
+  startJackpotPolling();
   const body = el('main', 'body');
   root.replaceChildren(header, body);
 
@@ -90,7 +92,9 @@ function render(root: HTMLElement, user: Session['user']): void {
       });
       menu.append(card);
     }
-    body.replaceChildren(menu);
+    const lobby = el('div', 'lobby');
+    lobby.append(jackpotBanner(), menu);
+    body.replaceChildren(lobby);
   };
 
   back.addEventListener('click', showMenu);
