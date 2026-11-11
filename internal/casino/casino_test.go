@@ -500,10 +500,10 @@ func TestCasinoReplay(t *testing.T) {
 	if want := float64(economy.StartBonus - 20 + int(first["payout"].(float64))); bal["balance"] != want {
 		t.Fatalf("баланс %v, ждали %v", bal["balance"], want)
 	}
-	if code, out := casinoCall(t, mux, "POST", "/api/blackjack", token, map[string]any{"stake": 5000}); code != http.StatusUnprocessableEntity || !strings.Contains(out["error"].(string), "Не хватает") {
+	if code, out := casinoCall(t, mux, "POST", "/api/blackjack", token, map[string]any{"stake": 5000}); code != http.StatusUnprocessableEntity || !strings.Contains(out["error"].(string), "Не хватает") || out["code"] != codeNotEnough {
 		t.Fatalf("ставка больше баланса: %d %v", code, out)
 	}
-	if code, out := casinoCall(t, mux, "POST", "/api/shop/buy", token, map[string]any{"item": "voucher"}); code != http.StatusUnprocessableEntity {
+	if code, out := casinoCall(t, mux, "POST", "/api/shop/buy", token, map[string]any{"item": "voucher"}); code != http.StatusUnprocessableEntity || out["code"] != codeNotEnough {
 		t.Fatalf("покупка без денег: %d %v", code, out)
 	}
 	for _, auto := range []float64{1, 100} {

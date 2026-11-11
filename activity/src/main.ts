@@ -1,11 +1,12 @@
 import './style.css';
 import { DiscordSDK } from '@discord/embedded-app-sdk';
-import { inDiscord, request, setToken, type AppConfig, type Session } from './api';
+import { inDiscord, onNotEnough, request, setToken, type AppConfig, type Session } from './api';
 import { el, type Cleanup, type Screen } from './dom';
 import { mountBlackjack } from './blackjack';
 import { mountPlinko } from './plinko';
 import { mountRocket } from './rocket';
 import { mountRoulette } from './roulette';
+import { showTooPoor } from './poor';
 import { mountShop } from './shop';
 import { refreshBalance, showBalanceIn } from './wallet';
 
@@ -117,6 +118,10 @@ async function start(root: HTMLElement): Promise<void> {
       return;
     }
     setToken(session.token);
+    onNotEnough(() => {
+      showTooPoor();
+      void refreshBalance();
+    });
     render(root, session.user);
   } catch (e) {
     console.log({ loginError: e instanceof Error ? e.message : e });

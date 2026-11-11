@@ -72,7 +72,18 @@ export type RocketPoll = { status: 'flying' } | RocketResult;
 
 interface ErrorBody {
   error: string;
+  code?: string;
 }
+
+/** Код ответа, когда поинтов не хватает на ставку или покупку. */
+export const notEnoughCode = 'not_enough';
+
+let notEnoughHandler: (() => void) | null = null;
+
+/** Что показать, когда сервер ответил, что поинтов не хватает. */
+export const onNotEnough = (fn: () => void): void => {
+  notEnoughHandler = fn;
+};
 
 const isErrorBody = (v: unknown): v is ErrorBody =>
   typeof v === 'object' && v !== null && typeof (v as ErrorBody).error === 'string';
@@ -93,6 +104,9 @@ export async function request<T>(method: 'GET' | 'POST', path: string, body?: un
   });
   const data: unknown = res.status === 204 ? null : await res.json().catch(() => null);
   if (!res.ok) {
+    if (isErrorBody(data) && data.code === notEnoughCode) {
+      notEnoughHandler?.();
+    }
     throw new Error(isErrorBody(data) ? data.error : `Ошибка сервера (${res.status})`);
   }
   return data as T;

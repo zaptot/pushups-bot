@@ -172,6 +172,13 @@ func writeError(w http.ResponseWriter, status int, text string) {
 	writeJSON(w, status, map[string]string{"error": text})
 }
 
+// codeNotEnough — по этому коду страница показывает картинку «ты слишком беден».
+const codeNotEnough = "not_enough"
+
+func writeNotEnough(w http.ResponseWriter, err error) {
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error(), "code": codeNotEnough})
+}
+
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, requestLimit)
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
@@ -398,7 +405,7 @@ func replayed(w http.ResponseWriter, id string, p player) bool {
 
 func respondBet(w http.ResponseWriter, raw json.RawMessage, err error, p player) {
 	if errors.Is(err, economy.ErrNotEnough) {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		writeNotEnough(w, err)
 		return
 	}
 	if errors.Is(err, errBetOwner) {
