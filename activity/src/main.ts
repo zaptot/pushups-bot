@@ -8,6 +8,7 @@ import { mountRocket } from './rocket';
 import { mountRoulette } from './roulette';
 import { showTooPoor } from './poor';
 import { mountShop } from './shop';
+import { casinoFeed } from './feed';
 import { jackpotBanner, startJackpotPolling } from './jackpot';
 import { refreshBalance, showBalanceIn } from './wallet';
 
@@ -93,7 +94,7 @@ function render(root: HTMLElement, user: Session['user']): void {
       menu.append(card);
     }
     const lobby = el('div', 'lobby');
-    lobby.append(jackpotBanner(), menu);
+    lobby.append(jackpotBanner(), menu, casinoFeed());
     body.replaceChildren(lobby);
   };
 

@@ -179,6 +179,8 @@ CREATE TABLE IF NOT EXISTS casino_bets (
     result     JSONB         NOT NULL,
     created_at TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
+-- ленты казино: последние игры и топ выигрышей за неделю
+CREATE INDEX IF NOT EXISTS idx_casino_bets_guild_time ON casino_bets (guild_id, created_at DESC);
 
 -- кошелёк поинтов: ставки, выигрыши, покупки (сделанные отжимания и стартовый бонус считаются отдельно)
 CREATE TABLE IF NOT EXISTS wallet (
