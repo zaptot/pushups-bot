@@ -35,6 +35,24 @@ export interface JackpotState {
   last: JackpotWin | null;
 }
 
+/** Сыгранная ставка в ленте казино; profit — чистый выигрыш: выплата + джекпот − ставка. */
+export interface FeedGame {
+  name: string;
+  game: string;
+  stake: number;
+  payout: number;
+  multiplier: number;
+  jackpot: number;
+  profit: number;
+  at: string;
+}
+
+export interface Feed {
+  recent: FeedGame[];
+  top: FeedGame[];
+  topDays: number;
+}
+
 export interface Settled {
   multiplier: number;
   payout: number;
