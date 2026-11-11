@@ -172,7 +172,18 @@ func oweHandler(r *request) error {
 	if reason != "" {
 		text += " — " + reason
 	}
-	return r.reply(text + fmt.Sprintf("\nТеперь осталось: **%d**", st.Remaining()))
+	return r.reply(text + "\n" + debtLine(st, "Теперь осталось"))
+}
+
+// debtLine — «Осталось: N», а если сделано больше назначенного — сколько в запасе.
+func debtLine(st store.Stat, label string) string {
+	if st.Remaining() > 0 {
+		return fmt.Sprintf("%s: **%d**", label, st.Remaining())
+	}
+	if st.Surplus() > 0 {
+		return fmt.Sprintf("Долгов нет, в запасе **+%d** — покроют следующие долги 🏆", st.Surplus())
+	}
+	return "Долгов нет — красавчик! 🏆"
 }
 
 func doneSummary(r *request, counted int) (string, error) {
@@ -181,10 +192,7 @@ func doneSummary(r *request, counted int) (string, error) {
 		return "", err
 	}
 	text := fmt.Sprintf("✅ %s засчитано **%d** отжиманий (за год: %d)\n", r.userMention(), counted, st.Done)
-	if st.Remaining() > 0 {
-		return text + fmt.Sprintf("Осталось: **%d**", st.Remaining()), nil
-	}
-	return text + "Долгов нет — красавчик! 🏆", nil
+	return text + debtLine(st, "Осталось"), nil
 }
 
 // announceCitizenship: возможно, теперь выполнены условия гражданства.
@@ -252,7 +260,7 @@ func statusHandler(r *request) error {
 	return r.replyEmbed(&discordgo.MessageEmbed{
 		Title: "Отжимания: " + t.Name, Color: colorOrange,
 		Fields: []*discordgo.MessageEmbedField{
-			field("Осталось", fmt.Sprint(st.Remaining()), true),
+			debtField(st),
 			field("Сделано", fmt.Sprint(st.Done), true),
 			field("Назначено", fmt.Sprint(st.Owed), true),
 			field("💰 Поинты", economy.Points(bal), true),
@@ -260,6 +268,14 @@ func statusHandler(r *request) error {
 		},
 		Footer: footer(fmt.Sprintf("За последние %d дней", windowDays)),
 	}, false)
+}
+
+// debtField — «Осталось» или, если сделано больше назначенного, «В запасе +N».
+func debtField(st store.Stat) *discordgo.MessageEmbedField {
+	if st.Surplus() > 0 {
+		return field("В запасе", fmt.Sprintf("+%d", st.Surplus()), true)
+	}
+	return field("Осталось", fmt.Sprint(st.Remaining()), true)
 }
 
 func topHandler(r *request) error {
