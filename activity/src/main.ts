@@ -11,6 +11,7 @@ import { mountShop } from './shop';
 import { casinoFeed } from './feed';
 import { jackpotBanner, startJackpotPolling } from './jackpot';
 import { refreshBalance, showBalanceIn } from './wallet';
+import { hasRules, rulesButton } from './rules';
 
 interface Game {
   id: string;
@@ -63,11 +64,15 @@ function render(root: HTMLElement, user: Session['user']): void {
   let cleanup: Cleanup | null = null;
   const header = el('header', 'top');
   const back = el('button', 'back hidden', '← Меню');
+  let current: string | null = null;
+  const rules = rulesButton(() => current);
+  const nav = el('div', 'nav');
+  nav.append(back, rules);
   const balance = el('span', 'balance');
   balance.title = 'Баланс, поинтов';
   const who = el('div', 'who');
   who.append(el('span', 'user', user.name), balance);
-  header.append(back, titleNode(), who);
+  header.append(nav, titleNode(), who);
   showBalanceIn(balance);
   void refreshBalance();
   startJackpotPolling();
@@ -78,6 +83,8 @@ function render(root: HTMLElement, user: Session['user']): void {
     cleanup?.();
     cleanup = null;
     back.classList.add('hidden');
+    rules.classList.add('hidden');
+    current = null;
     header.classList.remove('in-game');
     const menu = el('div', 'menu');
     for (const game of games) {
@@ -87,6 +94,8 @@ function render(root: HTMLElement, user: Session['user']): void {
       card.append(el('span', 'card-icon', game.icon), text);
       card.addEventListener('click', () => {
         back.classList.remove('hidden');
+        rules.classList.toggle('hidden', !hasRules(game.id));
+        current = game.id;
         header.classList.add('in-game');
         body.replaceChildren();
         cleanup = game.mount(body);
