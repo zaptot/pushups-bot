@@ -108,6 +108,32 @@ button:disabled {
   font-size: 0.9em;
 }
 
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rules-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 0.9em;
+}
+
+.rules-q {
+  display: inline-grid;
+  place-items: center;
+  width: 1.3em;
+  height: 1.3em;
+  border-radius: 50%;
+  background: var(--gold);
+  color: var(--bg);
+  font-weight: 900;
+  font-size: 0.85em;
+}
+
 .title {
   font-weight: 900;
   font-size: 1.15em;
@@ -583,6 +609,10 @@ button:disabled {
     display: none;
   }
 
+  .rules-label {
+    display: none;
+  }
+
   .card-face {
     width: 52px;
     height: 74px;
@@ -1008,4 +1038,49 @@ button:disabled {
   .feed {
     animation: none;
   }
+}
+
+/* правила игры */
+.rules .overlay-card {
+  width: min(100%, 560px);
+  max-height: calc(100dvh - 32px);
+  padding: 22px 20px 18px;
+  border-radius: 18px;
+  border: 1px solid var(--line-hi);
+  background: var(--panel);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 60%);
+  cursor: default;
+}
+
+.rules-body {
+  align-self: stretch;
+  overflow-y: auto;
+  padding-right: 8px;
+  line-height: 1.45;
+}
+
+.rules-title {
+  margin: 0 0 4px;
+  font-size: 1.3em;
+  color: var(--gold);
+}
+
+.rules-body h3 {
+  margin: 14px 0 6px;
+  font-size: 1em;
+  color: var(--gold-hi);
+}
+
+.rules-body ul {
+  margin: 0;
+  padding-left: 1.2em;
+  color: var(--text);
+}
+
+.rules-body li + li {
+  margin-top: 4px;
+}
+
+.rules-body li::marker {
+  color: var(--muted);
 }
