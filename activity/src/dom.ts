@@ -16,7 +16,7 @@ export function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 export const stakeMin = 10;
-export const stakeMax = 10000;
+export const stakeMax = 1000;
 
 export interface StakeField {
   /** Поле ставки и под ним строка джекпота с шансом сорвать его этой ставкой. */

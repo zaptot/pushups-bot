@@ -13,34 +13,28 @@ import (
 )
 
 func TestJackpotMath(t *testing.T) {
-	if got := jackpotContribution(100, 0); got != 10 {
-		t.Fatalf("проигрыш 100: в пул %d, ждали 10", got)
+	if got := jackpotContribution(100); got != 1 {
+		t.Fatalf("ставка 100: в пул %d, ждали 1", got)
 	}
-	if got := jackpotContribution(100, 60); got != 4 {
-		t.Fatalf("проигрыш 40: в пул %d, ждали 4", got)
-	}
-	if got := jackpotContribution(100, 250); got != 0 {
-		t.Fatalf("выигрыш: в пул %d, ждали 0", got)
-	}
-	// малые проигрыши пополняют пул в среднем ровно на 10%
+	// малые ставки пополняют пул в среднем ровно на 1%
 	const n = 200_000
 	sum := 0
 	for range n {
-		sum += jackpotContribution(15, 0)
+		sum += jackpotContribution(20)
 	}
-	if avg := float64(sum) / n; avg < 1.48 || avg > 1.52 {
-		t.Fatalf("проигрыш 15: в пул в среднем %.3f, ждали 1.5", avg)
+	if avg := float64(sum) / n; avg < 0.19 || avg > 0.21 {
+		t.Fatalf("ставка 20: в пул в среднем %.3f, ждали 0.2", avg)
 	}
 	for pool, want := range map[int]int{300: 270, 5: 4, 1: 0, 0: 0} {
 		if got := jackpotPrize(pool); got != want {
 			t.Fatalf("пул %d: приз %d, ждали %d", pool, got, want)
 		}
 	}
-	if c := jackpotChance(20, 300); c < 0.0033 || c > 0.0034 {
-		t.Fatalf("шанс ставки 20 при пуле 300: %v, ждали ~1/300", c)
+	if c := jackpotChance(20); c < 0.00039 || c > 0.00041 {
+		t.Fatalf("шанс ставки 20: %v, ждали 0.0004", c)
 	}
-	if c := jackpotChance(stakeMax, 1_000_000); c != 1 {
-		t.Fatalf("шанс не ограничен единицей: %v", c)
+	if c := jackpotChance(10_000); c != jackpotMaxChance {
+		t.Fatalf("шанс не ограничен потолком: %v", c)
 	}
 	if text := jackpotText(42, "roulette", 270); !strings.Contains(text, "<@42>") || !strings.Contains(text, "рулетке") || !strings.Contains(text, "270 поинтов") {
 		t.Fatalf("объявление: %q", text)
@@ -58,8 +52,9 @@ func jackpotOf(t *testing.T, raw json.RawMessage) jackpotOutcome {
 
 func TestJackpotSettle(t *testing.T) {
 	storetest.Begin(t)
+	wasEnabled := jackpotEnabled
 	jackpotEnabled = true
-	t.Cleanup(func() { jackpotRoll, jackpotEnabled = randRoll, false })
+	t.Cleanup(func() { jackpotRoll, jackpotEnabled = randRoll, wasEnabled })
 	jackpotRoll = func() float64 { return 1 } // не срывается
 
 	// ставок ещё не было: страница видит стартовую затравку
@@ -77,45 +72,46 @@ func TestJackpotSettle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jp := jackpotOf(t, raw); jp.Added != 10 || jp.Pool != jackpotSeed+10 || jp.Won != 0 {
-		t.Fatalf("проигрыш 100 в новый пул: %+v", jp)
+	if jp := jackpotOf(t, raw); jp.Added != 1 || jp.Pool != jackpotSeed+1 || jp.Won != 0 {
+		t.Fatalf("ставка 100 в новый пул: %+v", jp)
 	}
 	// повтор той же ставки не пополняет пул второй раз и отдаёт тот же итог
 	again, err := settle(lose, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jp := jackpotOf(t, again); jp.Pool != jackpotSeed+10 {
+	if jp := jackpotOf(t, again); jp.Pool != jackpotSeed+1 {
 		t.Fatalf("повтор: %+v", jp)
 	}
-	if n := count(t, "SELECT pool FROM jackpot WHERE guild_id = 1"); n != jackpotSeed+10 {
-		t.Fatalf("пул после повтора %d, ждали %d", n, jackpotSeed+10)
+	if n := count(t, "SELECT pool FROM jackpot WHERE guild_id = 1"); n != jackpotSeed+1 {
+		t.Fatalf("пул после повтора %d, ждали %d", n, jackpotSeed+1)
 	}
 
 	jackpotRoll = func() float64 { return 0 } // срывается с любой ставки
 	win := bet{ID: "jp-win", GuildID: testGuildID, UserID: 602, Name: "Второй", Game: "plinko",
-		Stake: 20, Payout: 40, Result: plinkoResult{Rows: 8, Risk: "low"}}
+		Stake: 100, Payout: 200, Result: plinkoResult{Rows: 8, Risk: "low"}}
 	raw, err = settle(win, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jp := jackpotOf(t, raw); jp.Added != 0 || jp.Won != 189 || jp.Pool != 21 {
-		t.Fatalf("срыв пула 210: %+v", jp)
+	// пул: 50 + 1 + 1 = 52; приз: 52 - ceil(5.2) = 46; остаток: 6
+	if jp := jackpotOf(t, raw); jp.Added != 1 || jp.Won != 46 || jp.Pool != 6 {
+		t.Fatalf("срыв пула 52: %+v", jp)
 	}
-	if bal, err := economy.Balance(testGuildID, 602); err != nil || bal != economy.StartBonus-20+40+189 {
-		t.Fatalf("баланс сорвавшего %d (%v), ждали %d", bal, err, economy.StartBonus-20+40+189)
+	if bal, err := economy.Balance(testGuildID, 602); err != nil || bal != economy.StartBonus-100+200+46 {
+		t.Fatalf("баланс сорвавшего %d (%v), ждали %d", bal, err, economy.StartBonus-100+200+46)
 	}
-	if n := count(t, "SELECT count(*) FROM jackpot_wins WHERE bet_id = 'jp-win' AND amount = 189"); n != 1 {
+	if n := count(t, "SELECT count(*) FROM jackpot_wins WHERE bet_id = 'jp-win' AND amount = 46"); n != 1 {
 		t.Fatalf("записей о срыве %d", n)
 	}
 
 	cfg.ActivityDevUserID = 602
 	mux := activityMux()
 	code, out := casinoCall(t, mux, "GET", "/api/jackpot", devToken(t, mux), nil)
-	if code != http.StatusOK || out["pool"] != 21.0 || out["target"] != float64(jackpotTarget) {
+	if code != http.StatusOK || out["pool"] != 6.0 || out["target"] != float64(jackpotTarget) {
 		t.Fatalf("GET /api/jackpot: %d %v", code, out)
 	}
-	if last, _ := out["last"].(map[string]any); last["name"] != "Второй" || last["amount"] != 189.0 || last["game"] != "plinko" {
+	if last, _ := out["last"].(map[string]any); last["name"] != "Второй" || last["amount"] != 46.0 || last["game"] != "plinko" {
 		t.Fatalf("последний джекпот: %v", out["last"])
 	}
 }
@@ -125,8 +121,10 @@ var randRoll = jackpotRoll
 // выключенный джекпот: пул не трогается, срыва нет, в итоге игры нет поля jackpot
 func TestJackpotDisabled(t *testing.T) {
 	storetest.Begin(t)
+	wasEnabled := jackpotEnabled
+	jackpotEnabled = false
 	jackpotRoll = func() float64 { return 0 } // сорвался бы с любой ставки
-	t.Cleanup(func() { jackpotRoll = randRoll })
+	t.Cleanup(func() { jackpotRoll, jackpotEnabled = randRoll, wasEnabled })
 	cfg.GuildID, cfg.ActivityDir = testGuild, ""
 	cfg.ActivityDevUserID = 602
 	t.Cleanup(func() { cfg.ActivityDevUserID = 0 })

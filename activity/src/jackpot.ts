@@ -1,5 +1,5 @@
-// Джекпот: пул, который растёт с проигрышей и срывается с любой ставки.
-// Шанс со ставки = ставка × пул / divisor (считает и сервер, здесь — только для подсказки).
+// Джекпот: пул, который растёт со ставок и срывается с любой ставки.
+// Шанс со ставки = min(maxChance, ставка / divisor) (считает и сервер, здесь — только для подсказки).
 import { request, type JackpotOutcome, type JackpotState } from './api';
 import { showOverlay } from './overlay';
 import { points, refreshBalance } from './wallet';
@@ -86,7 +86,7 @@ export function applyJackpot(outcome: JackpotOutcome | undefined): void {
 }
 
 function chance(stake: number): number {
-  return state && state.pool > 0 ? Math.min(1, (stake * state.pool) / state.divisor) : 0;
+  return state && state.pool > 0 ? Math.min(state.maxChance ?? 0.05, stake / state.divisor) : 0;
 }
 
 function chanceText(stake: number | null): string {

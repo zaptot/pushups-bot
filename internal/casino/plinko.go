@@ -10,11 +10,11 @@ import (
 const (
 	plinkoRowsMin = 8
 	plinkoRowsMax = 16
-	plinkoRTP     = 0.99
+	plinkoRTP     = 0.95
 )
 
 var (
-	plinkoGrowth = map[string]float64{"low": 1.45, "medium": 1.9, "high": 2.6}
+	plinkoGrowth = map[string]float64{"low": 1.45, "medium": 1.9, "high": 2.25}
 	plinkoTables = buildPlinkoTables()
 )
 

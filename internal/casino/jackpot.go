@@ -18,23 +18,22 @@ import (
 	"pushups-bot/internal/store"
 )
 
-// Джекпот: с каждой проигранной ставки jackpotShare проигрыша уходит в пул (это не списывается
-// с игрока, а возвращается игрокам из дохода казино — сознательная небольшая инфляция поинтов).
-// Сорвать пул можно с любой ставки: шанс = ставка × пул / jackpotDivisor, то есть он растёт
-// вместе с пулом и одинаков для каждого поставленного поинта. При jackpotDivisor = 1,8 млн и
-// ставках ~20 поинтов пул срывается в среднем раз на ~340 ставок, медиана приза ~325 (TestSimJackpot).
+// Джекпот: с каждой ставки jackpotRate (1%) уходит в пул (это не списывается с игрока, а
+// возвращается из дохода казино, который у игр составляет 2.7%–5%, поэтому общий RTP остаётся < 100%).
+// Сорвать пул можно с любой ставки: шанс = min(jackpotMaxChance, ставка / jackpotDivisor) — он не
+// зависит от размера пула, чтобы нельзя было выжидать горячий пул и снайпить его крупной ставкой.
+// При jackpotDivisor = 50 000 и ставках ~20 поинтов пул срывается в среднем раз на ~2500 ставок, средний приз ~510.
 const (
-	jackpotSeed   = 200  // стартовый пул сервера (тот же, что в миграции в store.Schema)
-	jackpotShare  = 0.10 // доля проигрыша, которая идёт в пул
-	jackpotKeep   = 0.10 // доля пула, которая остаётся затравкой следующего джекпота
-	jackpotTarget = 350  // около этого пул обычно срывается (симуляция: медиана приза ~325): по нему страница рисует «нагрев»
+	jackpotSeed      = 50   // стартовый пул сервера (тот же, что в миграции в store.Schema)
+	jackpotRate      = 0.01 // доля каждой ставки, которая идёт в пул
+	jackpotKeep      = 0.10 // доля пула, которая остаётся затравкой следующего джекпота
+	jackpotTarget    = 550  // около этого пул обычно срывается: по нему страница рисует «нагрев»
+	jackpotMaxChance = 0.05 // потолок шанса с одной ставки
 )
 
 var (
-	// jackpotEnabled — джекпот временно выключен: пул не пополняется и не срывается, страница его прячет.
-	// Пул в базе сохраняется как есть. Тесты джекпота включают его сами.
-	jackpotEnabled = false
-	jackpotDivisor = 1_800_000.0
+	jackpotEnabled = true
+	jackpotDivisor = 50_000.0
 	jackpotRoll    = rand.Float64 // подменяется в тестах
 )
 
@@ -45,17 +44,14 @@ type jackpotOutcome struct {
 	Won   int `json:"won,omitempty"` // сколько сорвал игрок (0 — не сорвал)
 }
 
-// jackpotContribution — доля проигрыша в пул; дробная часть округляется случайно, чтобы
-// маленькие ставки тоже пополняли пул в среднем ровно на jackpotShare.
-func jackpotContribution(stake, payout int) int {
-	if loss := stake - payout; loss > 0 {
-		return roundPayout(loss, jackpotShare)
-	}
-	return 0
+// jackpotContribution — доля ставки в пул; дробная часть округляется случайно, чтобы
+// маленькие ставки тоже пополняли пул в среднем ровно на jackpotRate.
+func jackpotContribution(stake int) int {
+	return roundPayout(stake, jackpotRate)
 }
 
-func jackpotChance(stake, pool int) float64 {
-	return math.Min(1, float64(stake)*float64(pool)/jackpotDivisor)
+func jackpotChance(stake int) float64 {
+	return math.Min(jackpotMaxChance, float64(stake)/jackpotDivisor)
 }
 
 // jackpotPrize — сколько получает сорвавший; остаток (не меньше jackpotKeep пула) остаётся в пуле.
@@ -84,7 +80,7 @@ func withJackpot(result any, jp jackpotOutcome) (json.RawMessage, error) {
 func settle(b bet, debit bool) (json.RawMessage, error) {
 	added, roll := 0, 1.0
 	if jackpotEnabled {
-		added, roll = jackpotContribution(b.Stake, b.Payout), jackpotRoll()
+		added, roll = jackpotContribution(b.Stake), jackpotRoll()
 	}
 	var moves []economy.Move
 	if debit {
@@ -149,7 +145,7 @@ func playJackpot(ctx context.Context, tx pgx.Tx, b bet, added int, roll float64,
 		return nil, err
 	}
 	*jp = jackpotOutcome{Pool: pool, Added: added}
-	if roll < jackpotChance(b.Stake, pool) {
+	if roll < jackpotChance(b.Stake) {
 		jp.Won = jackpotPrize(pool)
 		jp.Pool = pool - jp.Won
 	}
@@ -184,15 +180,16 @@ type jackpotWin struct {
 }
 
 type jackpotState struct {
-	Enabled bool        `json:"enabled"`
-	Pool    int         `json:"pool"`
-	Divisor float64     `json:"divisor"`
-	Target  int         `json:"target"`
-	Last    *jackpotWin `json:"last"`
+	Enabled   bool        `json:"enabled"`
+	Pool      int         `json:"pool"`
+	Divisor   float64     `json:"divisor"`
+	MaxChance float64     `json:"maxChance"`
+	Target    int         `json:"target"`
+	Last      *jackpotWin `json:"last"`
 }
 
 func handleJackpot(w http.ResponseWriter, _ *http.Request, p player) {
-	state := jackpotState{Enabled: jackpotEnabled, Divisor: jackpotDivisor, Target: jackpotTarget}
+	state := jackpotState{Enabled: jackpotEnabled, Divisor: jackpotDivisor, MaxChance: jackpotMaxChance, Target: jackpotTarget}
 	found, err := store.FetchOne(`SELECT pool FROM jackpot WHERE guild_id = $1`, []any{p.GuildID}, &state.Pool)
 	if err != nil {
 		respondBet(w, nil, err, p)

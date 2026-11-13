@@ -310,11 +310,12 @@ func TestCasinoBlackjackRules(t *testing.T) {
 		mult    float64
 		stake   int
 	}{
-		{"блэкджек игрока", []string{"As", "9h", "Kd", "7c"}, nil, "blackjack", 2.5, 20},
+		{"блэкджек игрока", []string{"As", "9h", "Kd", "7c"}, nil, "blackjack", 2.2, 20},
 		{"блэкджек у обоих", []string{"As", "Ah", "Kd", "Qc"}, nil, "push", 1, 20},
 		{"блэкджек дилера", []string{"Ts", "Ah", "9d", "Kc"}, nil, "lose", 0, 20},
 		{"20 против 19", []string{"Ks", "9h", "Qd", "Tc"}, []string{"stand"}, "win", 2, 20},
-		{"дилер стоит на мягких 17", []string{"Ts", "Ah", "8d", "6c", "Ks"}, []string{"stand"}, "win", 2, 20},
+		{"дилер добирает на мягких 17 и не усиливается", []string{"Ts", "Ah", "8d", "6c", "Ks"}, []string{"stand"}, "win", 2, 20},
+		{"дилер добирает на мягких 17 и побеждает", []string{"Ts", "9h", "Ad", "6c", "3s"}, []string{"stand"}, "lose", 0, 20},
 		{"дилер добирает с 16", []string{"Ts", "Th", "8d", "6c", "5s"}, []string{"stand"}, "lose", 0, 20},
 		{"дилер перебрал", []string{"Ts", "Th", "8d", "6c", "9s"}, []string{"stand"}, "win", 2, 20},
 		{"ничья", []string{"Ts", "Th", "8d", "8c"}, []string{"stand"}, "push", 1, 20},
@@ -352,6 +353,12 @@ func TestCasinoBlackjackRules(t *testing.T) {
 	if h.view().DealerTotal != 9 {
 		t.Fatalf("сумма дилера по открытой карте %d", h.view().DealerTotal)
 	}
+	if h.canDouble() {
+		t.Fatal("удвоение при сумме 12 должно быть запрещено")
+	}
+	if err := h.act("double"); err != errBadAction {
+		t.Fatalf("удвоение при сумме 12 должно быть отклонено, получили %v", err)
+	}
 	if err := h.act("hit"); err != nil || h.Seq != 1 || h.canDouble() {
 		t.Fatalf("после добора: %v, seq %d, удвоение %v", err, h.Seq, h.canDouble())
 	}
@@ -380,10 +387,10 @@ func TestCasinoRocket(t *testing.T) {
 				returned += mult
 			}
 		}
-		if p := float64(survived) / runs; math.Abs(p-0.99/m) > 0.01 {
-			t.Fatalf("x%.1f: доля %.4f, ждали %.4f", m, p, 0.99/m)
+		if p := float64(survived) / runs; math.Abs(p-0.95/m) > 0.01 {
+			t.Fatalf("x%.1f: доля %.4f, ждали %.4f", m, p, 0.95/m)
 		}
-		if rtp := returned / runs; math.Abs(rtp-0.99) > 0.02 {
+		if rtp := returned / runs; math.Abs(rtp-0.95) > 0.02 {
 			t.Fatalf("вывод на x%.1f: возврат %.4f", m, rtp)
 		}
 	}
@@ -497,10 +504,14 @@ func TestCasinoReplay(t *testing.T) {
 	}
 	betInterval = 0
 	_, bal := casinoCall(t, mux, "GET", "/api/balance", token, nil)
-	if want := float64(economy.StartBonus - 20 + int(first["payout"].(float64))); bal["balance"] != want {
+	want := float64(economy.StartBonus - 20 + int(first["payout"].(float64)))
+	if jp, ok := first["jackpot"].(map[string]any); ok && jp["won"] != nil {
+		want += jp["won"].(float64)
+	}
+	if bal["balance"] != want {
 		t.Fatalf("баланс %v, ждали %v", bal["balance"], want)
 	}
-	if code, out := casinoCall(t, mux, "POST", "/api/blackjack", token, map[string]any{"stake": 5000}); code != http.StatusUnprocessableEntity || !strings.Contains(out["error"].(string), "Не хватает") || out["code"] != codeNotEnough {
+	if code, out := casinoCall(t, mux, "POST", "/api/blackjack", token, map[string]any{"stake": 500}); code != http.StatusUnprocessableEntity || !strings.Contains(out["error"].(string), "Не хватает") || out["code"] != codeNotEnough {
 		t.Fatalf("ставка больше баланса: %d %v", code, out)
 	}
 	if code, out := casinoCall(t, mux, "POST", "/api/shop/buy", token, map[string]any{"item": "voucher"}); code != http.StatusUnprocessableEntity || out["code"] != codeNotEnough {

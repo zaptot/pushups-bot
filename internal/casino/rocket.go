@@ -14,6 +14,7 @@ import (
 
 const (
 	rocketGrowth  = 0.06
+	rocketRTP     = 95.0 // 5% мгновенного взрыва на x1.00, возврат ~95%
 	rocketMax     = 100.0
 	rocketAutoMin = 1.01
 	rocketAutoMax = 99.99 // на x100 ракета всегда взрывается (потолок crashPoint), выигрыш невозможен
@@ -49,7 +50,7 @@ type rocketResult struct {
 }
 
 func crashPoint(u float64) float64 {
-	return min(rocketMax, max(1, math.Floor(99/(1-u))/100))
+	return min(rocketMax, max(1, math.Floor(rocketRTP/(1-u))/100))
 }
 
 func rocketMultiplier(elapsed time.Duration) float64 {
