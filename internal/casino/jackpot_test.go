@@ -58,7 +58,8 @@ func jackpotOf(t *testing.T, raw json.RawMessage) jackpotOutcome {
 
 func TestJackpotSettle(t *testing.T) {
 	storetest.Begin(t)
-	t.Cleanup(func() { jackpotRoll = randRoll })
+	jackpotEnabled = true
+	t.Cleanup(func() { jackpotRoll, jackpotEnabled = randRoll, false })
 	jackpotRoll = func() float64 { return 1 } // не срывается
 
 	// ставок ещё не было: страница видит стартовую затравку
@@ -120,6 +121,31 @@ func TestJackpotSettle(t *testing.T) {
 }
 
 var randRoll = jackpotRoll
+
+// выключенный джекпот: пул не трогается, срыва нет, в итоге игры нет поля jackpot
+func TestJackpotDisabled(t *testing.T) {
+	storetest.Begin(t)
+	jackpotRoll = func() float64 { return 0 } // сорвался бы с любой ставки
+	t.Cleanup(func() { jackpotRoll = randRoll })
+	cfg.GuildID, cfg.ActivityDir = testGuild, ""
+	cfg.ActivityDevUserID = 602
+	t.Cleanup(func() { cfg.ActivityDevUserID = 0 })
+	mux := activityMux()
+	token := devToken(t, mux)
+	code, out := casinoCall(t, mux, "POST", "/api/roulette", token, map[string]any{"id": "jp-off", "stake": 20, "bet": map[string]any{"kind": "red"}})
+	if code != http.StatusOK || out["jackpot"] != nil {
+		t.Fatalf("ставка: %d %v", code, out)
+	}
+	if n := count(t, "SELECT count(*) FROM jackpot_wins WHERE bet_id = 'jp-off'"); n != 0 {
+		t.Fatal("джекпот сорвался, хотя выключен")
+	}
+	if n := count(t, "SELECT count(*) FROM jackpot WHERE guild_id = 1"); n != 0 {
+		t.Fatal("выключенный джекпот создал пул")
+	}
+	if _, st := casinoCall(t, mux, "GET", "/api/jackpot", token, nil); st["enabled"] != false {
+		t.Fatalf("страница должна знать, что джекпот выключен: %v", st)
+	}
+}
 
 // пул, созданный до затравки, получает её один раз при запуске схемы
 func TestJackpotSeedMigration(t *testing.T) {

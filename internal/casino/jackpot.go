@@ -31,6 +31,9 @@ const (
 )
 
 var (
+	// jackpotEnabled — джекпот временно выключен: пул не пополняется и не срывается, страница его прячет.
+	// Пул в базе сохраняется как есть. Тесты джекпота включают его сами.
+	jackpotEnabled = false
 	jackpotDivisor = 1_800_000.0
 	jackpotRoll    = rand.Float64 // подменяется в тестах
 )
@@ -79,8 +82,10 @@ func withJackpot(result any, jp jackpotOutcome) (json.RawMessage, error) {
 // settle записывает итог ставки, начисляет выигрыш, пополняет и разыгрывает джекпот одной транзакцией.
 // debit — списать ставку здесь же (для игр в один ход; у блэкджека и рокетки она списана в hold).
 func settle(b bet, debit bool) (json.RawMessage, error) {
-	added := jackpotContribution(b.Stake, b.Payout)
-	roll := jackpotRoll()
+	added, roll := 0, 1.0
+	if jackpotEnabled {
+		added, roll = jackpotContribution(b.Stake, b.Payout), jackpotRoll()
+	}
 	var moves []economy.Move
 	if debit {
 		moves = append(moves, stakeMove(b.ID, "stake", b.Stake))
@@ -90,21 +95,13 @@ func settle(b bet, debit bool) (json.RawMessage, error) {
 	var result json.RawMessage
 	var jp jackpotOutcome
 	_, err := economy.Apply(b.GuildID, b.UserID, func(ctx context.Context, tx pgx.Tx) error {
-		// строка пула блокируется до конца транзакции: ставки разных игроков разыгрывают его по очереди
-		var pool int
-		// первая ставка сервера создаёт пул сразу со стартовой затравкой
-		if err := tx.QueryRow(ctx, `INSERT INTO jackpot (guild_id, pool, seeded) VALUES ($1, $2::int + $3::int, true)
-			ON CONFLICT (guild_id) DO UPDATE SET pool = jackpot.pool + $2::int RETURNING pool`,
-			b.GuildID, added, jackpotSeed).Scan(&pool); err != nil {
-			return err
-		}
-		jp = jackpotOutcome{Pool: pool, Added: added}
-		if roll < jackpotChance(b.Stake, pool) {
-			jp.Won = jackpotPrize(pool)
-			jp.Pool = pool - jp.Won
-		}
 		var err error
-		if result, err = withJackpot(b.Result, jp); err != nil {
+		if !jackpotEnabled {
+			result, err = json.Marshal(b.Result)
+		} else {
+			result, err = playJackpot(ctx, tx, b, added, roll, &jp)
+		}
+		if err != nil {
 			return err
 		}
 		batch := &pgx.Batch{}
@@ -141,6 +138,24 @@ func settle(b bet, debit bool) (json.RawMessage, error) {
 	return result, nil
 }
 
+// playJackpot пополняет пул (строка блокируется до конца транзакции, ставки разыгрывают его по очереди),
+// разыгрывает срыв и возвращает итог игры с полем jackpot.
+func playJackpot(ctx context.Context, tx pgx.Tx, b bet, added int, roll float64, jp *jackpotOutcome) (json.RawMessage, error) {
+	var pool int
+	// первая ставка сервера создаёт пул сразу со стартовой затравкой
+	if err := tx.QueryRow(ctx, `INSERT INTO jackpot (guild_id, pool, seeded) VALUES ($1, $2::int + $3::int, true)
+			ON CONFLICT (guild_id) DO UPDATE SET pool = jackpot.pool + $2::int RETURNING pool`,
+		b.GuildID, added, jackpotSeed).Scan(&pool); err != nil {
+		return nil, err
+	}
+	*jp = jackpotOutcome{Pool: pool, Added: added}
+	if roll < jackpotChance(b.Stake, pool) {
+		jp.Won = jackpotPrize(pool)
+		jp.Pool = pool - jp.Won
+	}
+	return withJackpot(b.Result, *jp)
+}
+
 var jackpotGames = map[string]string{
 	"roulette":  "в рулетке",
 	"plinko":    "в Plinko",
@@ -169,6 +184,7 @@ type jackpotWin struct {
 }
 
 type jackpotState struct {
+	Enabled bool        `json:"enabled"`
 	Pool    int         `json:"pool"`
 	Divisor float64     `json:"divisor"`
 	Target  int         `json:"target"`
@@ -176,7 +192,7 @@ type jackpotState struct {
 }
 
 func handleJackpot(w http.ResponseWriter, _ *http.Request, p player) {
-	state := jackpotState{Divisor: jackpotDivisor, Target: jackpotTarget}
+	state := jackpotState{Enabled: jackpotEnabled, Divisor: jackpotDivisor, Target: jackpotTarget}
 	found, err := store.FetchOne(`SELECT pool FROM jackpot WHERE guild_id = $1`, []any{p.GuildID}, &state.Pool)
 	if err != nil {
 		respondBet(w, nil, err, p)

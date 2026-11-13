@@ -1083,4 +1083,8 @@ button:disabled {
 
 .rules-body li::marker {
   color: var(--muted);
+/* атрибут hidden сильнее display у баннера и строки джекпота */
+.jackpot[hidden],
+.jackpot-line[hidden] {
+  display: none;
 }

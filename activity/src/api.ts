@@ -29,6 +29,8 @@ export interface JackpotWin {
 }
 
 export interface JackpotState {
+  /** false — джекпот выключен на сервере: баннер и строка под ставкой не показываются. */
+  enabled: boolean;
   pool: number;
   divisor: number;
   target: number;

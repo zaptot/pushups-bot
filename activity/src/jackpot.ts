@@ -49,6 +49,9 @@ function watch(node: HTMLElement, fn: (added: number) => void): void {
 export async function refreshJackpot(): Promise<void> {
   try {
     state = await request<JackpotState>('GET', '/jackpot');
+    if (!state.enabled) {
+      clearInterval(pollTimer); // выключен — опрашивать нечего
+    }
     notify();
   } catch (e) {
     console.log({ jackpotError: e instanceof Error ? e.message : e });
@@ -156,8 +159,10 @@ export function jackpotBanner(): HTMLElement {
   banner.append(head, bar, heatLabel, last);
   const setAmount = counter(amount);
 
+  banner.hidden = true;
   const render = (): void => {
-    if (!state) {
+    banner.hidden = !state?.enabled;
+    if (!state?.enabled) {
       return;
     }
     const h = heat();
@@ -178,7 +183,8 @@ export function jackpotLine(input: HTMLInputElement, read: () => number | null):
   const text = make('span', '');
   line.append(text);
   const render = (): void => {
-    if (!state) {
+    line.hidden = !state?.enabled;
+    if (!state?.enabled) {
       text.textContent = '';
       return;
     }
