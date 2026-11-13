@@ -188,12 +188,12 @@ func TestSimPlinko(t *testing.T) {
 // ---------- Рокетка ----------
 
 // rocketTheory — точный RTP при выводе на m: P(crash > m) · m.
-// crash = floor(99/(1-u))/100 > m  ⇔  99/(1-u) ≥ 100m+1  ⇔  1-u ≤ 99/(100m+1).
+// crash = floor(rocketRTP/(1-u))/100 > m  ⇔  rocketRTP/(1-u) ≥ 100m+1  ⇔  1-u ≤ rocketRTP/(100m+1).
 func rocketTheory(m float64) float64 {
 	if m >= rocketMax {
 		return 0
 	}
-	return math.Min(1, 99/(math.Round(m*100)+1)) * m
+	return math.Min(1, rocketRTP/(math.Round(m*100)+1)) * m
 }
 
 func TestSimRocket(t *testing.T) {
@@ -221,8 +221,8 @@ func TestSimRocket(t *testing.T) {
 			capped++
 		}
 	}
-	t.Logf("  взрыв сразу на x1.00: %.3f%% (теория 1.00%%), упёрлись в потолок x100: %.3f%% (теория %.3f%%)",
-		float64(inst)/rounds*100, float64(capped)/rounds*100, 99.0/10000*100)
+	t.Logf("  взрыв сразу на x1.00: %.3f%% (теория %.2f%%), упёрлись в потолок x100: %.3f%% (теория %.3f%%)",
+		float64(inst)/rounds*100, 100-rocketRTP, float64(capped)/rounds*100, rocketRTP/10000*100)
 	for _, games := range []int{100, 1000} {
 		for _, auto := range []float64{2, 10} {
 			sessions(t, fmt.Sprintf("рокетка авто x%.0f", auto), 2000, games, func() (int, int) {
@@ -236,16 +236,15 @@ func TestSimRocket(t *testing.T) {
 
 // ---------- Блэкджек ----------
 
-// basicStrategy — базовая стратегия для одной колоды, дилер стоит на мягких 17, без сплита.
+// basicStrategy — базовая стратегия для 6 колод, H17, 6:5, удвоение на 9–11, без сплита.
 func basicStrategy(h *blackjackHand) string {
 	pt, soft := handTotal(h.Player)
 	up := min(h.Dealer[0].Rank, 10)
 	if up == 1 {
 		up = 11
 	}
-	two := len(h.Player) == 2
 	dbl := func(ok bool, fallback string) string {
-		if ok && two && h.canDouble() {
+		if ok && h.canDouble() {
 			return "double"
 		}
 		return fallback
@@ -255,19 +254,13 @@ func basicStrategy(h *blackjackHand) string {
 		case pt >= 19:
 			return "stand"
 		case pt == 18:
-			if up >= 3 && up <= 6 {
-				return dbl(true, "stand")
-			}
 			if up == 2 || up == 7 || up == 8 {
 				return "stand"
 			}
+			if up >= 3 && up <= 6 {
+				return "stand"
+			}
 			return "hit"
-		case pt == 17:
-			return dbl(up >= 3 && up <= 6, "hit")
-		case pt >= 15:
-			return dbl(up >= 4 && up <= 6, "hit")
-		case pt >= 13:
-			return dbl(up >= 5 && up <= 6, "hit")
 		}
 		return "hit"
 	}
@@ -289,9 +282,7 @@ func basicStrategy(h *blackjackHand) string {
 	case pt == 10:
 		return dbl(up <= 9, "hit")
 	case pt == 9:
-		return dbl(up <= 6, "hit")
-	case pt == 8:
-		return dbl(up == 5 || up == 6, "hit")
+		return dbl(up >= 3 && up <= 6, "hit")
 	}
 	return "hit"
 }
@@ -324,10 +315,10 @@ func TestSimBlackjack(t *testing.T) {
 		want float64 // ориентир по литературе для этих правил
 		tol  float64
 	}{
-		// одна колода, S17, 3:2, удвоение на любых двух, без сплита ≈ −0.4…−0.6% к базовой без сплита
-		{"базовая стратегия", basicStrategy, 0.995, 0.008},
-		// «как дилер» — классически около −5.5%
-		{"как дилер", mimicDealer, 0.945, 0.015},
+		// 6 колод, H17, 6:5, удвоение на 9–11, без сплита ≈ 97.86%
+		{"базовая стратегия", basicStrategy, 0.978, 0.008},
+		// «как дилер» — около 92.2%
+		{"как дилер", mimicDealer, 0.922, 0.015},
 	} {
 		var s simStats
 		var staked int64
@@ -342,16 +333,21 @@ func TestSimBlackjack(t *testing.T) {
 		checkRTP(t, "блэкджек "+st.name, s, st.want, st.tol)
 		t.Logf("    преимущество игрока на исходную ставку: %+.2f%%; исходы: %v", edgeOnInitial, pct(statuses, hands))
 	}
-	// разовые проверки честности колоды: 52 разные карты, каждая карта на каждой позиции равновероятна
+	// разовые проверки честности колоды: каждая карта встречается blackjackDecks раз и равновероятна на первой позиции
 	pos0 := make([]int, 52)
 	for range 520_000 {
 		d := shuffledDeck()
-		seen := map[card]bool{}
+		seen := map[card]int{}
 		for _, c := range d {
-			seen[c] = true
+			seen[c]++
 		}
-		if len(seen) != 52 {
-			t.Fatal("в колоде повторы")
+		for _, n := range seen {
+			if n != blackjackDecks {
+				t.Fatal("в колоде неверное число повторов карты")
+			}
+		}
+		if len(seen) != 52 || len(d) != 52*blackjackDecks {
+			t.Fatal("в колоде неверное число карт")
 		}
 		pos0[(d[0].Rank-1)*4+d[0].Suit]++
 	}
@@ -405,8 +401,8 @@ func TestSimJackpot(t *testing.T) {
 		}
 		staked += stake
 		payout += int64(pay)
-		pool += jackpotContribution(stake, pay)
-		if rand.Float64() < jackpotChance(stake, pool) {
+		pool += jackpotContribution(stake)
+		if rand.Float64() < jackpotChance(stake) {
 			prize := jackpotPrize(pool)
 			pool -= prize
 			prizes += prize

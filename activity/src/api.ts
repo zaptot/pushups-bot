@@ -33,6 +33,7 @@ export interface JackpotState {
   enabled: boolean;
   pool: number;
   divisor: number;
+  maxChance?: number;
   target: number;
   last: JackpotWin | null;
 }

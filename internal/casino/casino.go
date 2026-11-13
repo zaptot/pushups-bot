@@ -13,7 +13,7 @@ import (
 
 const (
 	stakeMin = 10
-	stakeMax = 10000
+	stakeMax = 1000
 	betIDMax = 64
 )
 

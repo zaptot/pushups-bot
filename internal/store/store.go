@@ -200,10 +200,10 @@ CREATE TABLE IF NOT EXISTS jackpot (
     guild_id BIGINT  PRIMARY KEY,
     pool     INTEGER NOT NULL DEFAULT 0
 );
--- стартовый пул 200 поинтов (casino.jackpotSeed) — один раз на сервер: новые строки создаются уже с ним,
+-- стартовый пул 50 поинтов (casino.jackpotSeed) — один раз на сервер: новые строки создаются уже с ним,
 -- а пулы, созданные до затравки, получают её здесь при первом запуске
 ALTER TABLE jackpot ADD COLUMN IF NOT EXISTS seeded BOOLEAN NOT NULL DEFAULT false;
-UPDATE jackpot SET pool = pool + 200, seeded = true WHERE NOT seeded;
+UPDATE jackpot SET pool = pool + 50, seeded = true WHERE NOT seeded;
 
 CREATE TABLE IF NOT EXISTS jackpot_wins (
     bet_id     TEXT        PRIMARY KEY,

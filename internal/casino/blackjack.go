@@ -14,6 +14,7 @@ import (
 
 const (
 	blackjackIdle   = 2 * time.Minute
+	blackjackDecks  = 6
 	blackjackHidden = "??"
 	blackjackRanks  = "A23456789TJQK"
 	blackjackSuits  = "shdc"
@@ -59,10 +60,12 @@ type blackjackView struct {
 }
 
 func shuffledDeck() []card {
-	deck := make([]card, 0, 52)
-	for suit := range 4 {
-		for rank := 1; rank <= 13; rank++ {
-			deck = append(deck, card{rank, suit})
+	deck := make([]card, 0, 52*blackjackDecks)
+	for range blackjackDecks {
+		for suit := range 4 {
+			for rank := 1; rank <= 13; rank++ {
+				deck = append(deck, card{rank, suit})
+			}
 		}
 	}
 	rand.Shuffle(len(deck), func(i, j int) { deck[i], deck[j] = deck[j], deck[i] })
@@ -105,7 +108,11 @@ func (h *blackjackHand) draw() card {
 }
 
 func (h *blackjackHand) canDouble() bool {
-	return h.Status == "playing" && len(h.Player) == 2 && h.Stake*2 <= stakeMax
+	if h.Status != "playing" || len(h.Player) != 2 || h.Stake*2 > stakeMax {
+		return false
+	}
+	t, _ := handTotal(h.Player)
+	return t >= 9 && t <= 11
 }
 
 func (h *blackjackHand) act(action string) error {
@@ -143,7 +150,7 @@ func (h *blackjackHand) resolve() {
 	}
 	if !pn && !dn {
 		for {
-			if dt, _ := handTotal(h.Dealer); dt >= 17 {
+			if dt, soft := handTotal(h.Dealer); dt > 17 || (dt == 17 && !soft) {
 				break
 			}
 			h.Dealer = append(h.Dealer, h.draw())
@@ -154,7 +161,7 @@ func (h *blackjackHand) resolve() {
 	case pn && dn, !pn && !dn && pt == dt:
 		h.Status, h.Mult = "push", 1
 	case pn:
-		h.Status, h.Mult = "blackjack", 2.5
+		h.Status, h.Mult = "blackjack", 2.2
 	case dn, dt <= 21 && dt > pt:
 		h.Status, h.Mult = "lose", 0
 	default:
